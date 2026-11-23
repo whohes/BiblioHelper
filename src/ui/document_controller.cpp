@@ -16,6 +16,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QApplication>
+#include <QLocale>
 #include <QScreen>
 #include <QStatusBar>
 #include <QTableView>
@@ -80,6 +81,8 @@ DocumentController::DocumentController(MainWindow *window)
     // Изменённые данные могут выпасть из фильтра: прокси пересчитывает строку сама.
     m_proxy->setDynamicSortFilter(true);
     connect(m_proxy, &QAbstractItemModel::modelReset, this, &DocumentController::updateCounts);
+    // Правка цены меняет сумму.
+    connect(m_model, &QAbstractItemModel::dataChanged, this, &DocumentController::updateCounts);
 }
 
 QString DocumentController::duplicateInventoryText(const QString &inventory, const QString &exceptId) const
@@ -202,7 +205,21 @@ void DocumentController::updateCounts()
             filtered << c;
     }
     m_window->booksHeader()->setFilteredColumns(filtered);
-    m_window->setRecordCount(m_proxy->rowCount(), m_model->rowCount(), m_proxy->hasAnyFilter());
+    m_window->setRecordCount(m_proxy->rowCount(), m_model->rowCount(), m_proxy->hasAnyFilter(), sumText());
+}
+
+QString DocumentController::sumText() const
+{
+    const core::FundSheet &sheet = m_model->sheet();
+    const int price = sheet.columnIndex(core::ColumnRole::Price);
+    if (price < 0)
+        return {};
+    const auto totals = m_proxy->totals(price, sheet.columnIndex(core::ColumnRole::Quantity));
+    QString text = QStringLiteral("на сумму %1 руб.")
+                       .arg(QLocale(QLocale::Russian).toString(totals.sum, 'f', 2));
+    if (totals.withoutPrice > 0)
+        text += QStringLiteral(" (без цены: %1)").arg(totals.withoutPrice);
+    return text;
 }
 
 void DocumentController::showColumnFilter(int column, const QPoint &globalPos)

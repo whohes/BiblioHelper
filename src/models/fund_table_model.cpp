@@ -12,14 +12,14 @@ namespace bh::models {
 
 namespace {
 
-// Старая запись цены: «2р20к», «202р», «44 р. 10 коп.» → рубли.
+// Старая запись цены: «2р20к», «202р», «45к», «44 р. 10 коп.» → рубли.
 bool parseRubles(const QString &text, double *rubles)
 {
     static const QRegularExpression re(
-        QStringLiteral("^\\s*(\\d+)\\s*р(?:уб)?\\.?\\s*(?:(\\d{1,2})\\s*к(?:оп)?\\.?)?\\s*$"),
+        QStringLiteral("^\\s*(?:(\\d+)\\s*р(?:уб)?\\.?)?\\s*(?:(\\d{1,2})\\s*к(?:оп)?\\.?)?\\s*$"),
         QRegularExpression::CaseInsensitiveOption);
     const QRegularExpressionMatch m = re.match(text);
-    if (!m.hasMatch())
+    if (!m.hasMatch() || (m.captured(1).isEmpty() && m.captured(2).isEmpty()))
         return false;
     *rubles = m.captured(1).toDouble() + (m.captured(2).isEmpty() ? 0.0 : m.captured(2).toDouble() / 100.0);
     return true;

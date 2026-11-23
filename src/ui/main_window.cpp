@@ -208,12 +208,13 @@ void MainWindow::setUndoText(const QString &text)
     m_undo->setToolTip(text.isEmpty() ? QStringLiteral("Отменять нечего") : text + QStringLiteral(" (Ctrl+Z)"));
 }
 
-void MainWindow::setRecordCount(int shown, int total, bool filtered)
+void MainWindow::setRecordCount(int shown, int total, bool filtered, const QString &sumText)
 {
+    const QString sum = sumText.isEmpty() ? QString() : QStringLiteral(" ") + sumText;
     m_countLabel->setText(filtered
-                              ? QStringLiteral("Показано %1 из %2 экземпляров. Включены поиск или фильтры — "
-                                               "«Сбросить фильтры» покажет все.").arg(shown).arg(total)
-                              : QStringLiteral("Всего экземпляров: %1").arg(total));
+                              ? QStringLiteral("Показано %1 из %2 экземпляров%3. Включены поиск или фильтры — "
+                                               "«Сбросить фильтры» покажет все.").arg(shown).arg(total).arg(sum)
+                              : QStringLiteral("Всего экземпляров: %1%2").arg(total).arg(sum));
     m_countLabel->setProperty("filtered", filtered);
     m_countLabel->style()->unpolish(m_countLabel);
     m_countLabel->style()->polish(m_countLabel);

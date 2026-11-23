@@ -78,6 +78,15 @@ public:
     // с количеством строк для каждого.
     QVector<QPair<QString, int>> columnValues(int column) const;
 
+    // Сумма по видимым строкам: цена × количество (пустое количество — 1 шт.).
+    struct Totals
+    {
+        int rows = 0;
+        double sum = 0;
+        int withoutPrice = 0;  // цена пустая или не число
+    };
+    Totals totals(int priceColumn, int quantityColumn) const;
+
 signals:
     void filtersChanged();
 

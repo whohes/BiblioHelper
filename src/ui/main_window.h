@@ -36,7 +36,8 @@ public:
     QTableView *booksTable() const { return m_booksTable; }
     FilterHeaderView *booksHeader() const { return m_booksHeader; }
     // «Показано 120 из 3138 экземпляров».
-    void setRecordCount(int shown, int total, bool filtered);
+    // sumText — «на сумму … руб.» для видимых строк, или пусто, если столбца цены нет.
+    void setRecordCount(int shown, int total, bool filtered, const QString &sumText = {});
     // Кнопка «Отменить»: пустой текст — отменять нечего.
     void setUndoText(const QString &text);
 
