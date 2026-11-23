@@ -7,7 +7,9 @@ include(FetchContent)
 # Релизные теги у проекта давно не обновлялись, поэтому закреплён коммит.
 FetchContent_Declare(OpenXLSX
     GIT_REPOSITORY https://github.com/troldal/OpenXLSX.git
-    GIT_TAG        c1220f3e0dc570f96fae456e69ac2eb13aa65f4d)
+    GIT_TAG        c1220f3e0dc570f96fae456e69ac2eb13aa65f4d
+    # Совместимость с GCC 8 (MinGW из Qt 5.15), см. сам скрипт.
+    PATCH_COMMAND  ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/patches/openxlsx_gcc8.cmake)
 set(OPENXLSX_CREATE_DOCS OFF CACHE BOOL "" FORCE)
 set(OPENXLSX_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
 set(OPENXLSX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
