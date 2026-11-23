@@ -12,6 +12,8 @@
 #include "fund_table_page.h"
 #include "record_dialog.h"
 #include "withdraw_dialog.h"
+#include "export_dialog.h"
+#include "core/fund_export.h"
 #include "io/xlsx_font_colors.h"
 #include "filter_header_view.h"
 #include "filter_popup.h"
@@ -37,6 +39,9 @@ namespace bh::ui {
 namespace {
 
 const QString kLastDirKey = QStringLiteral("files/lastDirectory");
+const QString kExportDirKey = QStringLiteral("files/exportDirectory");
+// Сколько автоматических копий «перед сохранением» хранить.
+constexpr int kKeepSaveBackups = 20;
 
 bool samePath(const QString &a, const QString &b)
 {
@@ -109,6 +114,10 @@ DocumentController::DocumentController(MainWindow *window)
     connect(window, &MainWindow::withdrawRequested, this, &DocumentController::withdrawSelected);
     connect(window, &MainWindow::restoreRequested, this, &DocumentController::restoreSelected);
     connect(window, &MainWindow::reportRequested, this, &DocumentController::createReport);
+    connect(window, &MainWindow::exportRequested, this, &DocumentController::exportData);
+    connect(window, &MainWindow::restoreVersionRequested, this, &DocumentController::restoreVersion);
+    connect(window, &MainWindow::openBackupFolderRequested, this, &DocumentController::openBackupFolder);
+    connect(window, &MainWindow::versionsTabShown, this, &DocumentController::refreshVersions);
     // Ширину столбцов «Выбывших» подбираем, когда вкладка видна: до этого у таблицы нет размера.
     connect(window, &MainWindow::withdrawnTabShown, this, [this] {
         if (m_fitWithdrawnPending && m_window->withdrawnPage()->isTableShown()) {
@@ -466,7 +475,8 @@ void DocumentController::cleanupReported(const QStringList &ids)
             return;  // сохранить не удалось, сообщение уже показано
     }
     // 2. Резервная копия.
-    const QString backup = core::WorkCopies::backup(m_workPath, QStringLiteral("перед очисткой"), &error);
+    const QString backup = core::WorkCopies::backup(m_workPath, QStringLiteral("перед очисткой"), &error,
+                                                    m_diskBooks, m_diskWithdrawn);
     if (backup.isEmpty()) {
         showError(QStringLiteral("Очистка не выполнена"), error);
         return;
@@ -493,7 +503,9 @@ void DocumentController::cleanupReported(const QStringList &ids)
         return;
     }
     m_model->setSheet(std::move(sheet));
+    rememberDiskCounts();
     m_window->setUnsavedChanges(false);
+    refreshVersions();
     QMessageBox::information(
         m_window, QStringLiteral("Очистка выбывших"),
         QStringLiteral("Очищено %1 экз. Их строки — на листе «%2» рабочей копии.\n\nРезервная копия до очистки:\n%3")
@@ -638,13 +650,22 @@ bool DocumentController::openFile(const QString &path)
     m_window->setWorkFileName(QFileInfo(workPath).fileName());
     m_window->setUnsavedChanges(false);
 
+    showWorkbook(layout, QFileInfo(path).fileName());
+    if (imported && m_model->rowCount() > 0)
+        finishImport(withdrawnMarks);
+    return true;
+}
+
+void DocumentController::showWorkbook(const core::ImportLayout &layout, const QString &displayName)
+{
     QApplication::setOverrideCursor(Qt::WaitCursor);
     core::FundSheet sheet;
     QString readError;
-    const bool read = core::FundSheetReader::read(m_workbook, layout, &sheet, &readError);
+    const bool read = layout.isValid() ? core::FundSheetReader::read(m_workbook, layout, &sheet, &readError)
+                                       : core::FundSheetReader::readBestSheet(m_workbook, &sheet, &readError);
     if (read) {
         // Цвет шрифта (ветхие / устаревшие) — отдельным чтением, только для показа.
-        core::FundSheetReader::applyFontColors(&sheet, io::readFontColors(workPath, sheet.sheetName));
+        core::FundSheetReader::applyFontColors(&sheet, io::readFontColors(m_workPath, sheet.sheetName));
         // Внутренние ID экземпляров: из скрытого листа или новые.
         core::CopyIds::assign(&sheet, core::CopyIds::load(m_workbook));
     }
@@ -667,11 +688,9 @@ bool DocumentController::openFile(const QString &path)
         updateCounts();
         m_window->statusBar()->showMessage(
             QStringLiteral("Открыт файл «%1», лист «%2», заголовки в строке %3. Рабочая копия: %4")
-                .arg(QFileInfo(path).fileName(), sheetName)
+                .arg(displayName, sheetName)
                 .arg(headerRow)
-                .arg(QDir::toNativeSeparators(workPath)));
-        if (imported)
-            finishImport(withdrawnMarks);
+                .arg(QDir::toNativeSeparators(m_workPath)));
     } else {
         m_model->setSheet({});
         m_window->withdrawnPage()->setMessage(QStringLiteral("В файле не найден список книг."));
@@ -679,9 +698,10 @@ bool DocumentController::openFile(const QString &path)
             QStringLiteral("Файл открыт, но список книг в нём не найден.\n\n%1").arg(readError));
         m_window->statusBar()->showMessage(
             QStringLiteral("Открыт файл «%1». Рабочая копия: %2")
-                .arg(QFileInfo(path).fileName(), QDir::toNativeSeparators(workPath)));
+                .arg(displayName, QDir::toNativeSeparators(m_workPath)));
     }
-    return true;
+    rememberDiskCounts();
+    refreshVersions();
 }
 
 void DocumentController::finishImport(const QSet<QString> &withdrawnMarks)
@@ -746,6 +766,17 @@ void DocumentController::save()
     if (!m_workbook.isOpen())
         return;
     QString error;
+    // Версия файла до сохранения — в резервные копии (окно «Прошлые версии»).
+    QString backupWarning;
+    if (QFileInfo::exists(m_workPath)) {
+        QString backupError;
+        if (core::WorkCopies::backup(m_workPath, core::WorkCopies::saveBackupReason(), &backupError, m_diskBooks,
+                                     m_diskWithdrawn)
+                .isEmpty())
+            backupWarning = QStringLiteral(" Резервная копия не сделана: %1").arg(backupError);
+        else
+            core::WorkCopies::pruneBackups(m_workPath, kKeepSaveBackups);
+    }
     if (!m_model->writeChanges(m_workbook, &error) || !m_workbook.saveAs(m_workPath, &error)) {
         showError(QStringLiteral("Не удалось сохранить"),
                   QStringLiteral("%1\n\nЕсли файл открыт в Excel, закройте его и нажмите «Сохранить» ещё раз.")
@@ -753,8 +784,189 @@ void DocumentController::save()
         return;
     }
     m_model->markSaved();
+    rememberDiskCounts();
     m_window->setUnsavedChanges(false);
-    m_window->statusBar()->showMessage(QStringLiteral("Изменения сохранены в рабочую копию"), 5000);
+    refreshVersions();
+    m_window->statusBar()->showMessage(QStringLiteral("Изменения сохранены в рабочую копию.") + backupWarning, 5000);
+}
+
+void DocumentController::rememberDiskCounts()
+{
+    const core::FundSheet &sheet = m_model->sheet();
+    m_diskWithdrawn = 0;
+    for (int r = 0; r < sheet.records.size(); ++r)
+        m_diskWithdrawn += sheet.isWithdrawn(r) ? 1 : 0;
+    m_diskBooks = sheet.records.size() - m_diskWithdrawn;
+}
+
+void DocumentController::refreshVersions()
+{
+    m_window->setVersions(m_workPath.isEmpty() ? QVector<core::WorkCopies::BackupInfo>()
+                                               : core::WorkCopies::backups(m_workPath));
+}
+
+void DocumentController::openBackupFolder()
+{
+    if (m_workPath.isEmpty())
+        return;
+    const QString dir = core::WorkCopies::backupDirectoryFor(m_workPath);
+    QDir().mkpath(dir);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+}
+
+void DocumentController::restoreVersion(const QString &backupPath)
+{
+    if (m_workPath.isEmpty() || !QFileInfo::exists(backupPath))
+        return;
+    const QFileInfo backupInfo(backupPath);
+    QString when = backupInfo.lastModified().toString(QStringLiteral("dd.MM.yyyy HH:mm"));
+    for (const auto &v : core::WorkCopies::backups(m_workPath)) {
+        if (v.path == backupInfo.absoluteFilePath())
+            when = v.createdAt.toString(QStringLiteral("dd.MM.yyyy HH:mm"));
+    }
+
+    QMessageBox confirm(m_window);
+    confirm.setIcon(QMessageBox::Question);
+    confirm.setWindowTitle(QStringLiteral("Вернуть версию"));
+    QString text = QStringLiteral("Вернуть рабочий файл к версии от %1?\n\n"
+                                  "Текущий файл программа сначала сохранит резервной копией "
+                                  "(«перед восстановлением»), его тоже можно будет вернуть.")
+                       .arg(when);
+    if (m_model->isModified())
+        text += QStringLiteral("\n\nНесохранённые изменения пропадут.");
+    confirm.setText(text);
+    auto *yes = confirm.addButton(QStringLiteral("Вернуть версию"), QMessageBox::AcceptRole);
+    auto *no = confirm.addButton(QStringLiteral("Отмена"), QMessageBox::RejectRole);
+    confirm.setDefaultButton(no);
+    confirm.exec();
+    if (confirm.clickedButton() != yes)
+        return;
+
+    QString error;
+    const QString safety = core::WorkCopies::backup(m_workPath, QStringLiteral("перед восстановлением"), &error,
+                                                    m_diskBooks, m_diskWithdrawn);
+    if (safety.isEmpty()) {
+        showError(QStringLiteral("Версия не возвращена"), error);
+        return;
+    }
+    // Новый файл кладём рядом и подменяем им рабочий: при ошибке рабочий файл остаётся прежним.
+    const QString staged = m_workPath + QStringLiteral(".restore");
+    QFile::remove(staged);
+    m_workbook.close();
+    bool ok = QFile::copy(backupPath, staged);
+    if (ok) {
+        QFile::setPermissions(staged, QFile::permissions(staged) | QFileDevice::WriteOwner | QFileDevice::WriteUser);
+        ok = QFile::remove(m_workPath) && QFile::rename(staged, m_workPath);
+    }
+    if (!ok) {
+        QFile::remove(staged);
+        if (!QFileInfo::exists(m_workPath))
+            QFile::copy(safety, m_workPath);
+        m_workbook.open(m_workPath, &error);
+        showError(QStringLiteral("Версия не возвращена"),
+                  QStringLiteral("Не удалось заменить рабочий файл. Если он открыт в Excel, закройте его и "
+                                 "попробуйте ещё раз."));
+        return;
+    }
+    if (!m_workbook.open(m_workPath, &error)) {
+        showError(QStringLiteral("Версия не возвращена"), error);
+        return;
+    }
+    showWorkbook(core::ImportLayout::load(m_workbook), QFileInfo(m_originalPath).fileName());
+    m_window->setUnsavedChanges(false);
+    m_window->statusBar()->showMessage(
+        QStringLiteral("Возвращена версия от %1. Прежний файл сохранён копией «перед восстановлением».").arg(when));
+}
+
+void DocumentController::exportData()
+{
+    if (!m_workbook.isOpen())
+        return;
+    const core::FundSheet &sheet = m_model->sheet();
+    ExportDialog::Counts counts;
+    for (int r = 0; r < sheet.records.size(); ++r) {
+        if (sheet.isWithdrawn(r))
+            ++counts.withdrawnAll;
+        else
+            ++counts.activeAll;
+    }
+    counts.activeShown = m_proxy->rowCount();
+    counts.withdrawnShown = m_withdrawnProxy->rowCount();
+    ExportDialog::Scope initial = ExportDialog::Scope::ActiveAll;
+    if (m_window->isWithdrawnTabActive())
+        initial = counts.withdrawnShown != counts.withdrawnAll ? ExportDialog::Scope::WithdrawnShown
+                                                               : ExportDialog::Scope::WithdrawnAll;
+    else if (counts.activeShown != counts.activeAll)
+        initial = ExportDialog::Scope::ActiveShown;
+
+    ExportDialog dialog(sheet, counts, initial, m_window);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const ExportDialog::Scope scope = dialog.scope();
+
+    core::FundExport exporter;
+    exporter.title = ExportDialog::scopeTitle(scope);
+    exporter.fundName = QFileInfo(m_originalPath).completeBaseName();
+    exporter.createdOn = QDate::currentDate();
+    exporter.columns = dialog.columns();
+    auto shown = [this](models::FundFilterProxy *proxy) {
+        QVector<int> rows;
+        for (int r = 0; r < proxy->rowCount(); ++r)
+            rows.push_back(proxy->mapToSource(proxy->index(r, 0)).row());
+        return rows;
+    };
+    switch (scope) {
+    case ExportDialog::Scope::ActiveShown: exporter.records = shown(m_proxy); break;
+    case ExportDialog::Scope::WithdrawnShown: exporter.records = shown(m_withdrawnProxy); break;
+    default:
+        for (int r = 0; r < sheet.records.size(); ++r) {
+            const bool withdrawn = sheet.isWithdrawn(r);
+            if (scope == ExportDialog::Scope::Everything || (scope == ExportDialog::Scope::WithdrawnAll) == withdrawn)
+                exporter.records.push_back(r);
+        }
+    }
+
+    const bool csv = dialog.format() == core::FundExport::Format::Csv;
+    const QString suffix = csv ? QStringLiteral("csv") : QStringLiteral("xlsx");
+    QSettings settings;
+    QString dir = settings.value(kExportDirKey).toString();
+    if (dir.isEmpty() || !QFileInfo(dir).isDir()) {
+        dir = core::WorkCopies::exportDirectory();
+        QDir().mkpath(dir);
+    }
+    const QString suggested = QDir(dir).filePath(QStringLiteral("%1 — %2 %3.%4")
+                                                     .arg(exporter.fundName, exporter.title.toLower(),
+                                                          QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd")),
+                                                          suffix)
+                                                     .replace(QLatin1Char('('), QString())
+                                                     .replace(QLatin1Char(')'), QString()));
+    QString path = QFileDialog::getSaveFileName(
+        m_window, QStringLiteral("Сохранить экспорт (%1 экз.)").arg(exporter.records.size()), suggested,
+        csv ? QStringLiteral("Файлы CSV (*.csv)") : QStringLiteral("Файлы Excel (*.xlsx)"));
+    if (path.isEmpty())
+        return;
+    if (QFileInfo(path).suffix().compare(suffix, Qt::CaseInsensitive) != 0)
+        path += QLatin1Char('.') + suffix;
+    if (samePath(path, m_originalPath) || samePath(path, m_workPath)) {
+        showError(QStringLiteral("Экспорт"),
+                  QStringLiteral("Этот файл — ваш фонд. Экспорт сохраняется в отдельный файл: выберите другое имя."));
+        return;
+    }
+    settings.setValue(kExportDirKey, QFileInfo(path).absolutePath());
+
+    QString error;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = exporter.write(path, dialog.format(), sheet, &error);
+    QApplication::restoreOverrideCursor();
+    if (!ok) {
+        showError(QStringLiteral("Не удалось выгрузить"), error);
+        return;
+    }
+    m_window->statusBar()->showMessage(QStringLiteral("Выгружено %1 экз. в %2")
+                                           .arg(exporter.records.size())
+                                           .arg(QDir::toNativeSeparators(path)));
+    if (dialog.openAfterSave())
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 void DocumentController::saveAs()

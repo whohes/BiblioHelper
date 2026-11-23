@@ -4,6 +4,8 @@ add_library(bh_core STATIC
     core/copy_ids.cpp
     core/csv_import.h
     core/csv_import.cpp
+    core/fund_export.h
+    core/fund_export.cpp
     core/fund_sheet.h
     core/fund_sheet.cpp
     core/import_layout.h
@@ -48,6 +50,8 @@ add_executable(BiblioHelper WIN32
     ui/fund_table_page.h
     ui/icons.h
     ui/icons.cpp
+    ui/export_dialog.h
+    ui/export_dialog.cpp
     ui/import_wizard.h
     ui/import_wizard.cpp
     ui/fund_table_page.cpp

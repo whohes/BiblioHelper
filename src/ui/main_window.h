@@ -1,6 +1,9 @@
 #pragma once
 
+#include "core/work_copy.h"
+
 #include <QMainWindow>
+#include <QVector>
 
 class QAbstractItemModel;
 
@@ -10,6 +13,7 @@ class QTableView;
 class QLineEdit;
 class QPushButton;
 class QTabWidget;
+class QTableWidget;
 
 namespace bh::ui {
 
@@ -39,6 +43,8 @@ public:
     void showWithdrawnTab();
     // Кнопка «Отменить»: пустой текст — отменять нечего.
     void setUndoText(const QString &text);
+    // Список прошлых версий (резервных копий) на вкладке «Импорт и экспорт».
+    void setVersions(const QVector<core::WorkCopies::BackupInfo> &versions);
 
 signals:
     void openRequested();
@@ -54,6 +60,9 @@ signals:
     void withdrawnTabShown();
     void resetFiltersRequested();
     void searchTextChanged(const QString &text);
+    void restoreVersionRequested(const QString &backupPath);
+    void openBackupFolderRequested();
+    void versionsTabShown();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -87,6 +96,12 @@ private:
     QPushButton *m_export = nullptr;
     QPushButton *m_undo = nullptr;
     QPushButton *m_resetFilters = nullptr;
+    QPushButton *m_exportTabButton = nullptr;
+    QTableWidget *m_versions = nullptr;
+    QPushButton *m_restoreVersion = nullptr;
+    QPushButton *m_openBackups = nullptr;
+    QLabel *m_versionsEmpty = nullptr;
+    QVector<core::WorkCopies::BackupInfo> m_versionList;
 
     QString m_workFileName;
     bool m_unsaved = false;
