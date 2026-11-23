@@ -40,6 +40,8 @@ add_executable(BiblioHelper WIN32
     ui/filter_header_view.cpp
     ui/filter_popup.h
     ui/fund_table_page.h
+    ui/icons.h
+    ui/icons.cpp
     ui/fund_table_page.cpp
     ui/filter_popup.cpp
     ui/record_dialog.h

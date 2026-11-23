@@ -1,6 +1,7 @@
 #include "record_dialog.h"
 
 #include <QDialogButtonBox>
+#include <QStyle>
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -77,6 +78,9 @@ RecordDialog::RecordDialog(const core::FundSheet &sheet, const QVector<QVariant>
     auto *buttons = new QDialogButtonBox(this);
     auto *save = buttons->addButton(QStringLiteral("Сохранить"), QDialogButtonBox::AcceptRole);
     auto *cancel = buttons->addButton(QStringLiteral("Отмена"), QDialogButtonBox::RejectRole);
+    save->setProperty("primary", true);
+    save->style()->unpolish(save);
+    save->style()->polish(save);
     for (auto *b : {save, cancel})
         b->setMinimumHeight(44);
     save->setDefault(true);

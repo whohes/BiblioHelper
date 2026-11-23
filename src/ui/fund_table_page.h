@@ -29,13 +29,19 @@ public:
     void addButton(QPushButton *button);
 
     void setMessage(const QString &text);
+    // Пустой экран: заголовок крупно и кнопка под текстом (например, «Открыть Excel»).
+    void setEmptyTitle(const QString &title);
+    void setEmptyAction(QPushButton *button);
     void showTable(QAbstractItemModel *model);
     bool isTableShown() const { return currentIndex() == 1; }
     // filtered — включены поиск или фильтры (строка выделяется).
     void setCountText(const QString &text, bool filtered);
 
 private:
+    QWidget *m_empty = nullptr;
+    QLabel *m_title = nullptr;
     QLabel *m_message = nullptr;
+    QBoxLayout *m_emptyLayout = nullptr;
     QTableView *m_table = nullptr;
     FilterHeaderView *m_header = nullptr;
     QLabel *m_count = nullptr;

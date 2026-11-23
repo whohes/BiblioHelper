@@ -2,6 +2,9 @@
 
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPolygonF>
+
+#include <algorithm>
 
 namespace bh::ui {
 
@@ -42,33 +45,51 @@ QSize FilterHeaderView::sectionSizeFromContents(int logicalIndex) const
 void FilterHeaderView::paintSection(QPainter *painter, const QRect &rect, int logicalIndex) const
 {
     const bool filtered = m_filtered.contains(logicalIndex);
-    painter->save();
-    if (filtered)
-        painter->fillRect(rect, QColor(0xfd, 0xf0, 0xc8));
-    painter->restore();
+    // Фон всей секции, включая место под кнопку фильтра.
+    painter->fillRect(rect, filtered ? QColor(0xfd, 0xf0, 0xc8) : QColor(0xee, 0xf2, 0xf7));
 
     // Текст заголовка без области кнопки.
     painter->save();
     QHeaderView::paintSection(painter, rect.adjusted(0, 0, -kButtonWidth, 0), logicalIndex);
     painter->restore();
 
+    // Кнопка фильтра: серая «галочка вниз», при включённом фильтре — синяя плашка с воронкой.
     const QRect button = buttonRect(rect);
+    const int side = std::min(button.width(), 22);
+    const QRectF box(button.center().x() - side / 2.0 + 0.5, button.center().y() - side / 2.0 + 0.5, side, side);
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing);
-    painter->setPen(QColor(0x9a, 0x9a, 0x9a));
-    painter->setBrush(filtered ? QColor(0xf2, 0xc9, 0x4c) : QColor(0xff, 0xff, 0xff));
-    painter->drawRoundedRect(button.adjusted(0, button.height() / 2 - 12, 0, -(button.height() / 2 - 12)), 4, 4);
-    painter->setPen(QColor(0x1f, 0x1f, 0x1f));
-    QFont f = painter->font();
-    f.setPointSizeF(f.pointSizeF() * 0.8);
-    painter->setFont(f);
-    // ▼ — фильтр, «Ф» на подсвеченном — фильтр включён.
-    painter->drawText(button, Qt::AlignCenter, filtered ? QStringLiteral("▼✓") : QStringLiteral("▼"));
+    if (filtered) {
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QColor(0x2f, 0x6d, 0xb5));
+        painter->drawRoundedRect(box, 5, 5);
+        const QPointF c = box.center();
+        const qreal w = side * 0.32;
+        QPolygonF funnel;
+        funnel << QPointF(c.x() - w, c.y() - w * 0.8) << QPointF(c.x() + w, c.y() - w * 0.8)
+               << QPointF(c.x() + w * 0.2, c.y() + w * 0.1) << QPointF(c.x() + w * 0.2, c.y() + w * 0.9)
+               << QPointF(c.x() - w * 0.2, c.y() + w * 0.6) << QPointF(c.x() - w * 0.2, c.y() + w * 0.1);
+        painter->setBrush(Qt::white);
+        painter->drawPolygon(funnel);
+    } else {
+        if (m_hoverSection == logicalIndex) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(0xdc, 0xe4, 0xee));
+            painter->drawRoundedRect(box, 5, 5);
+        }
+        QPen pen(QColor(0x6b, 0x77, 0x86), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        painter->setPen(pen);
+        painter->setBrush(Qt::NoBrush);
+        const QPointF c = box.center();
+        const qreal w = side * 0.2;
+        painter->drawPolyline(QPolygonF() << QPointF(c.x() - w, c.y() - w * 0.5) << QPointF(c.x(), c.y() + w * 0.5)
+                                          << QPointF(c.x() + w, c.y() - w * 0.5));
+    }
     painter->restore();
 
     // Разделитель между столбцами.
     painter->save();
-    painter->setPen(QColor(0xc8, 0xc8, 0xc8));
+    painter->setPen(QColor(0xd5, 0xdc, 0xe5));
     painter->drawLine(rect.topRight(), rect.bottomRight());
     painter->restore();
 }
@@ -96,7 +117,21 @@ void FilterHeaderView::mouseMoveEvent(QMouseEvent *event)
         overButton = buttonRect(section).contains(event->pos());
     }
     setCursor(overButton ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    const int hover = overButton ? logical : -1;
+    if (hover != m_hoverSection) {
+        m_hoverSection = hover;
+        viewport()->update();
+    }
     QHeaderView::mouseMoveEvent(event);
+}
+
+void FilterHeaderView::leaveEvent(QEvent *event)
+{
+    if (m_hoverSection >= 0) {
+        m_hoverSection = -1;
+        viewport()->update();
+    }
+    QHeaderView::leaveEvent(event);
 }
 
 } // namespace bh::ui

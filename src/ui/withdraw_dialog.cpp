@@ -3,6 +3,7 @@
 #include <QComboBox>
 #include <QDateEdit>
 #include <QDialogButtonBox>
+#include <QStyle>
 #include <QFormLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -56,6 +57,9 @@ WithdrawDialog::WithdrawDialog(const core::FundSheet &sheet, const QVector<int> 
             .arg(records.size()),
         this);
     intro->setWordWrap(true);
+    // Перенос строк не учитывается в минимальной высоте окна: без этого окно получается ниже
+    // нужного и поле «Дата выбытия» наезжает на список.
+    intro->setMinimumHeight(intro->heightForWidth(minimumWidth() - 24));
     layout->addWidget(intro);
 
     auto *list = new QTableWidget(records.size(), 3, this);
@@ -74,8 +78,13 @@ WithdrawDialog::WithdrawDialog(const core::FundSheet &sheet, const QVector<int> 
         list->setItem(i, 2, new QTableWidgetItem(record.excelRow > 0 ? QString::number(record.excelRow)
                                                                       : QStringLiteral("новая")));
     }
-    list->setMinimumHeight(std::min(records.size(), 8) * (fontMetrics().height() + 12) + 48);
+    // Строки одной высоты; до 8 строк видно без прокрутки.
+    const int rowHeight = fontMetrics().height() + 16;
+    list->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    list->verticalHeader()->setDefaultSectionSize(rowHeight);
+    list->setMinimumHeight(std::min(records.size(), 8) * rowHeight + fontMetrics().height() * 2 + 24);
     layout->addWidget(list, 1);
+    layout->addSpacing(6);
 
     auto *form = new QFormLayout;
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -106,6 +115,9 @@ WithdrawDialog::WithdrawDialog(const core::FundSheet &sheet, const QVector<int> 
     auto *ok = buttons->addButton(QStringLiteral("Оформить выбытие (%1 экз.)").arg(records.size()),
                                   QDialogButtonBox::AcceptRole);
     auto *cancel = buttons->addButton(QStringLiteral("Отмена"), QDialogButtonBox::RejectRole);
+    ok->setProperty("primary", true);
+    ok->style()->unpolish(ok);
+    ok->style()->polish(ok);
     for (auto *b : {ok, cancel})
         b->setMinimumHeight(44);
     ok->setDefault(true);
