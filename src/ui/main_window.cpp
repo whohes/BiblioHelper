@@ -4,6 +4,7 @@
 
 #include <QCloseEvent>
 #include <QHBoxLayout>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -105,7 +106,12 @@ QWidget *MainWindow::createToolbar()
     m_export = createActionButton(QStringLiteral("Экспорт Excel"),
                                   QStringLiteral("Сохранить список в новый Excel-файл"));
 
-    for (auto *button : {m_open, m_save, m_saveAs, m_addBook, m_edit, m_withdraw, m_export})
+    m_undo = createActionButton(QStringLiteral("Отменить"),
+                                QStringLiteral("Отменить последнее изменение (до сохранения)"));
+    m_undo->setShortcut(QKeySequence::Undo);
+    m_undo->setEnabled(false);
+
+    for (auto *button : {m_open, m_save, m_saveAs, m_addBook, m_edit, m_undo, m_withdraw, m_export})
         row->addWidget(button);
 
     connect(m_open, &QPushButton::clicked, this, &MainWindow::openRequested);
@@ -115,6 +121,7 @@ QWidget *MainWindow::createToolbar()
     connect(m_edit, &QPushButton::clicked, this, &MainWindow::editRequested);
     connect(m_withdraw, &QPushButton::clicked, this, &MainWindow::withdrawRequested);
     connect(m_export, &QPushButton::clicked, this, &MainWindow::exportRequested);
+    connect(m_undo, &QPushButton::clicked, this, &MainWindow::undoRequested);
     return bar;
 }
 
@@ -193,6 +200,12 @@ void MainWindow::showBooksTable(QAbstractItemModel *model)
     m_booksTable->sortByColumn(-1, Qt::AscendingOrder);  // порядок как в файле
     m_booksHeader->setSortIndicator(-1, Qt::AscendingOrder);
     m_booksStack->setCurrentIndex(1);
+}
+
+void MainWindow::setUndoText(const QString &text)
+{
+    m_undo->setEnabled(!text.isEmpty());
+    m_undo->setToolTip(text.isEmpty() ? QStringLiteral("Отменять нечего") : text + QStringLiteral(" (Ctrl+Z)"));
 }
 
 void MainWindow::setRecordCount(int shown, int total, bool filtered)

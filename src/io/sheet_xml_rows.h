@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
+#include <QVector>
 
 namespace pugi {
 class xml_node;
@@ -20,6 +22,10 @@ void insertRowsAfter(pugi::xml_node worksheet, int afterRow, int count, int temp
 
 // Сдвиг ссылок в тексте формулы или в атрибуте ref/sqref.
 QString shiftReferences(const QString &text, int afterRow, int count);
+
+// Заменить все данные служебного листа таблицей строк (текст, inline-строки:
+// не трогает общий словарь строк книги). Строка 1 — первая строка таблицы.
+void replaceSheetData(pugi::xml_node worksheet, const QVector<QStringList> &rows);
 
 // Пересчитать формулы при открытии в Excel (итоги после добавления строк).
 void requestFullCalcOnLoad(pugi::xml_node workbook);

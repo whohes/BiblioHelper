@@ -5,6 +5,7 @@
 
 #include <pugixml.hpp>
 
+#include <algorithm>
 #include <vector>
 
 namespace bh::io::sheetxml {
@@ -231,6 +232,54 @@ void insertRowsAfter(pugi::xml_node worksheet, int afterRow, int count, int temp
         else
             row.append_attribute("r").set_value(r);
         previous = row;
+    }
+}
+
+QString columnName(int column)
+{
+    QString letters;
+    while (column > 0) {
+        const int rem = (column - 1) % 26;
+        letters.prepend(QChar('A' + rem));
+        column = (column - 1) / 26;
+    }
+    return letters;
+}
+
+void replaceSheetData(pugi::xml_node worksheet, const QVector<QStringList> &rows)
+{
+    pugi::xml_node sheetData = worksheet.child("sheetData");
+    if (sheetData)
+        worksheet.remove_child(sheetData);
+    // sheetData идёт после sheetFormatPr/cols (или sheetViews) по схеме.
+    pugi::xml_node after = worksheet.child("cols");
+    if (!after)
+        after = worksheet.child("sheetFormatPr");
+    if (!after)
+        after = worksheet.child("sheetViews");
+    if (!after)
+        after = worksheet.child("dimension");
+    sheetData = after ? worksheet.insert_child_after("sheetData", after) : worksheet.prepend_child("sheetData");
+
+    int maxColumns = 0;
+    for (int r = 0; r < rows.size(); ++r) {
+        pugi::xml_node row = sheetData.append_child("row");
+        row.append_attribute("r").set_value(r + 1);
+        const QStringList &values = rows.at(r);
+        maxColumns = std::max(maxColumns, int(values.size()));
+        for (int c = 0; c < values.size(); ++c) {
+            if (values.at(c).isEmpty())
+                continue;
+            pugi::xml_node cell = row.append_child("c");
+            cell.append_attribute("r").set_value((columnName(c + 1) + QString::number(r + 1)).toUtf8().constData());
+            cell.append_attribute("t").set_value("inlineStr");
+            cell.append_child("is").append_child("t").text().set(values.at(c).toUtf8().constData());
+        }
+    }
+    pugi::xml_node dimension = worksheet.child("dimension");
+    if (dimension && !rows.isEmpty() && maxColumns > 0) {
+        const QString ref = QStringLiteral("A1:%1%2").arg(columnName(maxColumns)).arg(rows.size());
+        dimension.attribute("ref").set_value(ref.toUtf8().constData());
     }
 }
 

@@ -1,5 +1,7 @@
 # Библиотека с логикой и работой с файлами: её же подключают автотесты.
 add_library(bh_core STATIC
+    core/copy_ids.h
+    core/copy_ids.cpp
     core/fund_sheet.h
     core/fund_sheet.cpp
     core/work_copy.h
@@ -34,6 +36,8 @@ add_executable(BiblioHelper WIN32
     ui/filter_header_view.cpp
     ui/filter_popup.h
     ui/filter_popup.cpp
+    ui/record_dialog.h
+    ui/record_dialog.cpp
     ui/main_window.h
     ui/main_window.cpp
     resources/resources.qrc

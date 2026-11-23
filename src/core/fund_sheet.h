@@ -40,7 +40,8 @@ struct FundColumn
 // Одна запись фонда = одна строка Excel = один экземпляр.
 struct FundRecord
 {
-    int excelRow = 0;
+    QString id;           // внутренний ID экземпляра (c-xxxxxxxx), не зависит от строки
+    int excelRow = 0;     // 0 — новая запись, ещё не записана в Excel
     QVector<QVariant> values;  // по порядку FundSheet::columns
     QVector<QRgb> colors;      // цвет шрифта ячеек (0 — обычный); пусто, если цветов нет
 };
@@ -80,6 +81,10 @@ public:
 
 // Строка для поиска и сравнения: нижний регистр, ё → е, одиночные пробелы.
 QString normalizeForSearch(const QString &text);
+
+// Значение для записи из текста, введённого в форме: числа остаются
+// числами (как в остальном столбце), «б/н», «2р20к», «63,3 (2)» — текстом.
+QVariant valueFromInput(const QString &text, ColumnRole role, const QVariant &previous = {});
 
 // Текст ячейки для показа: лишние пробелы убраны, числа без «.0».
 QString displayText(const QVariant &value);

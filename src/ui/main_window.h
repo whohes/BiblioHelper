@@ -37,6 +37,8 @@ public:
     FilterHeaderView *booksHeader() const { return m_booksHeader; }
     // «Показано 120 из 3138 экземпляров».
     void setRecordCount(int shown, int total, bool filtered);
+    // Кнопка «Отменить»: пустой текст — отменять нечего.
+    void setUndoText(const QString &text);
 
 signals:
     void openRequested();
@@ -46,6 +48,7 @@ signals:
     void editRequested();
     void withdrawRequested();
     void exportRequested();
+    void undoRequested();
     void resetFiltersRequested();
     void searchTextChanged(const QString &text);
 
@@ -79,6 +82,7 @@ private:
     QPushButton *m_edit = nullptr;
     QPushButton *m_withdraw = nullptr;
     QPushButton *m_export = nullptr;
+    QPushButton *m_undo = nullptr;
     QPushButton *m_resetFilters = nullptr;
 
     QString m_workFileName;

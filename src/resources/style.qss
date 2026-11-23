@@ -61,3 +61,4 @@ QLabel#countLabel { color: #333333; }
 QLabel#countLabel[filtered="true"] { color: #8a4b00; font-weight: bold; }
 QListView::indicator, QCheckBox::indicator { width: 20px; height: 20px; }
 QListView::item { padding: 3px 2px; }
+QLabel#warningLabel { color: #8a4b00; font-weight: bold; }

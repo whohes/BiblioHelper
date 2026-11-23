@@ -29,8 +29,14 @@ private slots:
     void save();
     void saveAs();
     void showColumnFilter(int column, const QPoint &globalPos);
+    void addBook();
+    void editSelected();
+    void editRow(int modelRow);
+    void undo();
     void updateCounts();
     void fitColumns();
+    void selectRecord(const QString &id);
+    QString duplicateInventoryText(const QString &inventory, const QString &exceptId) const;
 
 private:
     bool confirmDiscardChanges();

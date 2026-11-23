@@ -3,6 +3,12 @@
 #include "core/fund_sheet.h"
 
 #include <QAbstractTableModel>
+#include <QHash>
+#include <QSet>
+
+namespace bh::io {
+class XlsxWorkbook;
+}
 
 namespace bh::models {
 
@@ -19,6 +25,8 @@ public:
     static constexpr int SearchRole = Qt::UserRole + 2;
     // Номер строки Excel.
     static constexpr int ExcelRowRole = Qt::UserRole + 3;
+    // Внутренний ID экземпляра.
+    static constexpr int IdRole = Qt::UserRole + 4;
 
     explicit FundTableModel(QObject *parent = nullptr);
 
@@ -30,6 +38,29 @@ public:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 
+    // ---- Изменения (до «Сохранить» живут только в памяти) ----
+    int rowForId(const QString &id) const;
+    // Заменить значения записи (по порядку столбцов). Возвращает false, если ничего не изменилось.
+    bool updateRecord(int row, const QVector<QVariant> &values);
+    // Новая запись в конце списка; возвращает её строку в модели.
+    int addRecord(const QVector<QVariant> &values);
+
+    bool canUndo() const { return !m_undo.isEmpty(); }
+    QString undoText() const;
+    void undo();
+
+    bool isModified() const { return m_modified; }
+    int newRecordCount() const;
+
+    // Записать изменения в открытую рабочую копию (ещё без сохранения файла):
+    // изменённые ячейки, новые строки после последней строки данных, лист ID.
+    bool writeChanges(io::XlsxWorkbook &workbook, QString *error);
+    // После успешного сохранения файла: изменений больше нет.
+    void markSaved();
+
+signals:
+    void modifiedChanged(bool modified);
+
 private:
     struct Cell
     {
@@ -38,8 +69,24 @@ private:
         QVariant sortKey;
     };
 
+    struct UndoStep
+    {
+        enum Kind { Edit, Add } kind;
+        int row = 0;
+        QVector<QVariant> oldValues;
+        QSet<int> oldDirty;
+        QString text;
+    };
+
+    Cell makeCell(int column, const QVariant &value) const;
+    void rebuildRow(int row);
+    void setModified(bool modified);
+
     core::FundSheet m_sheet;
-    QVector<QVector<Cell>> m_cells;  // заранее посчитанный текст: быстрые поиск и сортировка
+    QVector<QVector<Cell>> m_cells;
+    QHash<int, QSet<int>> m_dirty;  // строка модели → изменённые столбцы
+    QVector<UndoStep> m_undo;
+    bool m_modified = false;  // заранее посчитанный текст: быстрые поиск и сортировка
 };
 
 } // namespace bh::models

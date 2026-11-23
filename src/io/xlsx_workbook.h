@@ -75,6 +75,9 @@ public:
     bool appendRowsAfter(const QString &sheet, int afterRow, int count, int templateRow,
                          QString *error = nullptr);
 
+    // Полностью заменить содержимое листа текстовой таблицей (служебный лист ID).
+    bool replaceSheetText(const QString &sheet, const QVector<QStringList> &rows, QString *error = nullptr);
+
     bool cellHasFormula(const QString &sheet, int row, int column) const;
     QString cellFormula(const QString &sheet, int row, int column) const;
 

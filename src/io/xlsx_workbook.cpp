@@ -308,6 +308,22 @@ bool XlsxWorkbook::appendRowsAfter(const QString &sheet, int afterRow, int count
     }
 }
 
+bool XlsxWorkbook::replaceSheetText(const QString &sheet, const QVector<QStringList> &rows, QString *error)
+{
+    if (!isOpen()) {
+        setError(error, QStringLiteral("Файл не открыт"));
+        return false;
+    }
+    try {
+        auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
+        sheetxml::replaceSheetData(XmlAccess::of(ws).document_element(), rows);
+        return true;
+    } catch (const std::exception &e) {
+        setError(error, QStringLiteral("Не удалось записать служебный лист: %1").arg(fromUtf8(e.what())));
+        return false;
+    }
+}
+
 bool XlsxWorkbook::cellHasFormula(const QString &sheet, int row, int column) const
 {
     if (!isOpen() || !validCoordinates(row, column))
