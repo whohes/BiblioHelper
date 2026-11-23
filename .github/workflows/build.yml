@@ -61,7 +61,12 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build\src\BiblioHelper.exe dist\
-          windeployqt --release --no-translations --compiler-runtime dist\BiblioHelper.exe
+          # Явный путь: в PATH раннера есть и другие qmake/windeployqt.
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          & (Join-Path $qtBin 'qmake.exe') -query QT_INSTALL_PLUGINS
+          & (Join-Path $qtBin 'windeployqt.exe') --release --no-translations --compiler-runtime dist\BiblioHelper.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path dist\platforms\qwindows.dll)) { throw 'Нет platforms\qwindows.dll' }
 
       - uses: actions/upload-artifact@v4
         with:
