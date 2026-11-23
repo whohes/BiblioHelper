@@ -1,0 +1,70 @@
+name: Сборка и тесты
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Основная сборка: Qt 5.15 + MinGW 32 бита, запускается на Windows 7–11.
+  windows-win32:
+    name: Windows (Qt 5.15, 32 бита)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить Qt 5.15.2 и MinGW 8.1 (32 бита)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          host: windows
+          target: desktop
+          arch: win32_mingw81
+          tools: 'tools_mingw,qt.tools.win32_mingw810'
+          cache: true
+
+      - name: Подключить компилятор MinGW 8.1 (32 бита)
+        shell: pwsh
+        run: Add-Content $env:GITHUB_PATH "$env:IQTA_TOOLS\mingw810_32\bin"
+
+      - name: Настроить сборку
+        shell: pwsh
+        run: >
+          cmake -S . -B build -G "MinGW Makefiles"
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+
+      - name: Собрать
+        run: cmake --build build -j 4
+
+      - name: Автотесты
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Собрать папку с программой
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build\src\BiblioHelper.exe dist\
+          windeployqt --release --no-translations --compiler-runtime dist\BiblioHelper.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BiblioHelper-win32
+          path: dist/
+
+  # Быстрая проверка, что код собирается и на Linux (системный Qt 5.15).
+  linux:
+    name: Linux (Qt 5.15)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установить Qt 5
+        run: sudo apt-get update && sudo apt-get install -y qtbase5-dev qtbase5-private-dev
+      - name: Собрать
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j 4
+      - name: Автотесты
+        run: ctest --test-dir build --output-on-failure
