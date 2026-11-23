@@ -40,14 +40,35 @@ jobs:
         run: cmake --build build -j 4
 
       - name: Автотесты
+        env:
+          QT_FORCE_STDERR_LOGGING: 1
         run: ctest --test-dir build --output-on-failure
+
+      - name: Подробности, если тесты упали
+        if: failure()
+        shell: pwsh
+        env:
+          # Без консоли Qt пишет сообщения в OutputDebugString, а не в лог.
+          QT_FORCE_STDERR_LOGGING: 1
+        run: |
+          Get-Command libstdc++-6.dll, libgcc_s_dw2-1.dll, Qt5Core.dll -All -ErrorAction SilentlyContinue | Format-Table Source
+          & build\tests\test_xlsx_roundtrip.exe -v1
+          "Код выхода: 0x{0:X8}" -f $LASTEXITCODE
+          gdb -batch -ex run -ex bt --args build\tests\test_xlsx_roundtrip.exe -v1
 
       - name: Собрать папку с программой
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build\src\BiblioHelper.exe dist\
-          windeployqt --release --no-translations --compiler-runtime dist\BiblioHelper.exe
+          # Явный путь: в PATH раннера есть и другие qmake/windeployqt.
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          Get-ChildItem (Join-Path $env:QT_ROOT_DIR 'plugins\platforms') | Select-Object -ExpandProperty Name
+          # Без --release: windeployqt 5.15 для MinGW сам определяет тип сборки,
+          # а с этим флагом может не найти platforms\qwindows.dll.
+          & (Join-Path $qtBin 'windeployqt.exe') --no-translations --compiler-runtime dist\BiblioHelper.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path dist\platforms\qwindows.dll)) { throw 'Нет platforms\qwindows.dll' }
 
       - uses: actions/upload-artifact@v4
         with:

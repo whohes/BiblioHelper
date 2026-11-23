@@ -24,6 +24,12 @@ endif()
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Concurrent)
 message(STATUS "Qt ${QT_VERSION}")
 
+if(MINGW)
+    # Программа и тесты не зависят от libgcc/libstdc++ DLL: иначе на
+    # компьютере может подхватиться чужая DLL другой версии из PATH.
+    add_link_options(-static-libgcc -static-libstdc++)
+endif()
+
 include(cmake/Dependencies.cmake)
 
 add_subdirectory(src)

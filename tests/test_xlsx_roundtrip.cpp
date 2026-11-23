@@ -16,6 +16,9 @@
 
 #include <private/qzipreader_p.h>
 
+#include <cstdio>
+#include <exception>
+
 namespace {
 
 QByteArray sha256(const QString &path)
@@ -102,6 +105,7 @@ private slots:
     void roundtrip_data();
     void roundtrip();
     void cyrillicPath();
+    void cyrillicTempFolder();
 
 private:
     QString dataPath(const QString &name) const
@@ -243,7 +247,67 @@ void XlsxRoundtripTest::cyrillicPath()
     QVERIFY2(wb.open(work, &error), qPrintable(error));
     QVERIFY2(wb.saveAs(saved, &error), qPrintable(error));
     QVERIFY(QFile::exists(saved));
+
+    // Сохранённый файл открывается снова, данные на месте.
+    bh::io::XlsxWorkbook reopened;
+    QVERIFY2(reopened.open(saved, &error), qPrintable(error));
+    QCOMPARE(reopened.sheetNames(), wb.sheetNames());
 }
 
-QTEST_GUILESS_MAIN(XlsxRoundtripTest)
+void XlsxRoundtripTest::cyrillicTempFolder()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Проверка нужна только для Windows (имя пользователя на русском)");
+#else
+    // Если имя пользователя Windows на русском, временная папка тоже
+    // с русскими буквами. Программа должна найти другую служебную папку.
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString russianTemp = tmp.filePath(QStringLiteral("Временные"));
+    QVERIFY(QDir().mkpath(russianTemp));
+    const QByteArray oldTmp = qgetenv("TMP");
+    const QByteArray oldTemp = qgetenv("TEMP");
+    qputenv("TMP", QDir::toNativeSeparators(russianTemp).toLocal8Bit());
+    qputenv("TEMP", QDir::toNativeSeparators(russianTemp).toLocal8Bit());
+
+    const QString root = bh::io::XlsxWorkbook::stagingRoot();
+    bh::io::XlsxWorkbook wb;
+    QString error;
+    const bool opened = wb.open(dataPath(QStringLiteral("fund_bobrinka.xlsx")), &error);
+    wb.close();
+
+    qputenv("TMP", oldTmp);
+    qputenv("TEMP", oldTemp);
+    QVERIFY2(!root.isEmpty(), "служебная папка не найдена");
+    for (const QChar c : root)
+        QVERIFY2(c.unicode() <= 0x7e, qPrintable(root));
+    QVERIFY2(opened, qPrintable(error));
+#endif
+}
+
+// Свой main вместо QTEST_GUILESS_MAIN: если тест аварийно завершится
+// (std::terminate), вывод не потеряется в буфере и будет видна причина.
+int main(int argc, char *argv[])
+{
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::set_terminate([] {
+        std::fprintf(stderr, "std::terminate: ");
+        try {
+            if (auto e = std::current_exception())
+                std::rethrow_exception(e);
+            std::fprintf(stderr, "без исключения\n");
+        } catch (const std::exception &e) {
+            std::fprintf(stderr, "%s\n", e.what());
+        } catch (...) {
+            std::fprintf(stderr, "неизвестное исключение\n");
+        }
+        std::fflush(stderr);
+        std::abort();
+    });
+
+    QCoreApplication app(argc, argv);
+    XlsxRoundtripTest test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    return QTest::qExec(&test, argc, argv);
+}
 #include "test_xlsx_roundtrip.moc"
