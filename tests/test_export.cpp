@@ -1,5 +1,6 @@
 // Этап 7: экспорт и прошлые версии (резервные копии).
 
+#include "core/action_log.h"
 #include "core/fund_export.h"
 #include "core/fund_sheet.h"
 #include "core/work_copy.h"
@@ -12,6 +13,7 @@
 #include <QThread>
 #include <QtTest>
 
+using bh::core::ActionLog;
 using bh::core::ColumnRole;
 using bh::core::FundExport;
 using bh::core::FundSheet;
@@ -29,6 +31,7 @@ private slots:
     void xlsx();
     void csv();
     void backupsListAndPrune();
+    void actionLog();
 
 private:
     static QString dataPath(const QString &name)
@@ -168,6 +171,46 @@ void ExportTest::backupsListAndPrune()
     QVERIFY(QFileInfo::exists(keep));
     QVERIFY(!QFileInfo::exists(first));
     QDir(WorkCopies::backupDirectoryFor(work)).removeRecursively();
+}
+
+void ExportTest::actionLog()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("Журнал/журнал.jsonl"));
+    ActionLog log(path);
+    QVERIFY(log.append(QStringLiteral("open"), QStringLiteral("Фонд А.xlsx"), QStringLiteral("Рабочая копия"), 296));
+    QVERIFY(log.append(QStringLiteral("withdraw"), QStringLiteral("Фонд А.xlsx"),
+                       QStringLiteral("23.11.2026, причина: ветхость. инв. № 1, «Книга \"в кавычках\"»"), 2));
+    QVERIFY(log.append(QStringLiteral("export"), QStringLiteral("Фонд Б.xlsx"), QStringLiteral("Весь фонд"), 10));
+    // Повреждённая строка (например, оборванная при сбое питания) не мешает чтению.
+    {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::Append));
+        file.write("{\"time\":\"2026-11-23T10:");
+        file.write("\n");
+    }
+    QVERIFY(log.append(QStringLiteral("save"), QStringLiteral("Фонд А.xlsx"), {}));
+
+    const auto all = log.read();
+    QCOMPARE(all.size(), 4);
+    QCOMPARE(all.first().action, QStringLiteral("save"));  // новые первыми
+    QCOMPARE(all.first().count, -1);
+    QCOMPARE(all.last().action, QStringLiteral("open"));
+    QCOMPARE(all.last().count, 296);
+    QCOMPARE(all.last().actionTitle(), QStringLiteral("Открытие файла"));
+
+    const auto fundA = log.read(500, QStringLiteral("Фонд А.xlsx"));
+    QCOMPARE(fundA.size(), 3);
+    QVERIFY(fundA.at(1).details.contains(QStringLiteral("\"в кавычках\"")));
+    QCOMPARE(log.read(1).size(), 1);
+
+    // Большой журнал откладывается в отдельный файл, новый начинается с нуля.
+    log.setMaxBytes(200);
+    QVERIFY(log.append(QStringLiteral("add"), QStringLiteral("Фонд А.xlsx"), QStringLiteral("инв. № 5"), 1));
+    QCOMPARE(log.read().size(), 1);
+    const QStringList files = QDir(QFileInfo(path).absolutePath()).entryList({QStringLiteral("*.jsonl")}, QDir::Files);
+    QCOMPARE(files.size(), 2);
 }
 
 QTEST_GUILESS_MAIN(ExportTest)

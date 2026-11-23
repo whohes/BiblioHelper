@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/action_log.h"
 #include "core/import_layout.h"
 #include "core/work_copy.h"
 #include "io/xlsx_workbook.h"
@@ -45,6 +46,8 @@ private slots:
     void restoreVersion(const QString &backupPath);
     void refreshVersions();
     void openBackupFolder();
+    void refreshLog();
+    void openLogFolder();
     // Сколько действующих и выбывших в файле на диске (для резервных копий).
     void rememberDiskCounts();
     // Читает лист открытой рабочей копии (по настройкам мастера или сам ищет
@@ -68,9 +71,17 @@ private:
     QVector<int> selectedModelRows(QTableView *table, models::FundFilterProxy *proxy) const;
     QString countText(models::FundFilterProxy *proxy, bool withdrawn) const;
     void showError(const QString &title, const QString &text);
+    // Запись в журнал действий для текущего фонда.
+    void log(const QString &action, const QString &details, int count = -1);
+    // «инв. № 123, «Пушкин А. С. Сказки»» — для журнала.
+    QString describeRecord(const QVector<QVariant> &values) const;
+    // Несколько экземпляров: первые три и «и ещё N».
+    QString describeRows(const QVector<int> &rows) const;
 
     MainWindow *m_window;
     core::WorkCopies m_workCopies;
+    core::ActionLog m_log;
+    bool m_logCurrentOnly = true;
     io::XlsxWorkbook m_workbook;
     QString m_originalPath;
     QString m_workPath;

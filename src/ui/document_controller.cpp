@@ -118,6 +118,12 @@ DocumentController::DocumentController(MainWindow *window)
     connect(window, &MainWindow::restoreVersionRequested, this, &DocumentController::restoreVersion);
     connect(window, &MainWindow::openBackupFolderRequested, this, &DocumentController::openBackupFolder);
     connect(window, &MainWindow::versionsTabShown, this, &DocumentController::refreshVersions);
+    connect(window, &MainWindow::logTabShown, this, &DocumentController::refreshLog);
+    connect(window, &MainWindow::logScopeChanged, this, [this](bool currentOnly) {
+        m_logCurrentOnly = currentOnly;
+        refreshLog();
+    });
+    connect(window, &MainWindow::openLogFolderRequested, this, &DocumentController::openLogFolder);
     // Ширину столбцов «Выбывших» подбираем, когда вкладка видна: до этого у таблицы нет размера.
     connect(window, &MainWindow::withdrawnTabShown, this, [this] {
         if (m_fitWithdrawnPending && m_window->withdrawnPage()->isTableShown()) {
@@ -196,6 +202,7 @@ void DocumentController::addBook()
     if (dialog.exec() != QDialog::Accepted)
         return;
     const int row = m_model->addRecord(dialog.values());
+    log(QStringLiteral("add"), describeRecord(dialog.values()), 1);
     selectRecord(m_model->index(row, 0).data(models::FundTableModel::IdRole).toString());
     m_window->statusBar()->showMessage(QStringLiteral("Книга добавлена. Нажмите «Сохранить», чтобы записать её в Excel."), 10000);
 }
@@ -242,7 +249,18 @@ void DocumentController::editRow(int modelRow)
     const int row = m_model->rowForId(id);
     if (row < 0)
         return;
-    if (m_model->updateRecord(row, dialog.values())) {
+    const QVector<QVariant> after = dialog.values();
+    QStringList changes;
+    const core::FundSheet &sheet = m_model->sheet();
+    for (int c = 0; c < sheet.columns.size() && c < after.size(); ++c) {
+        const QString was = core::displayText(record.values.value(c));
+        const QString now = core::displayText(after.at(c));
+        if (was != now)
+            changes << QStringLiteral("%1: «%2» → «%3»").arg(sheet.columns.at(c).title, was, now);
+    }
+    if (m_model->updateRecord(row, after)) {
+        log(QStringLiteral("edit"),
+            QStringLiteral("%1. %2").arg(describeRecord(record.values), changes.join(QStringLiteral("; "))), 1);
         if (!m_model->isWithdrawn(row))
             selectRecord(id);
         m_window->statusBar()->showMessage(QStringLiteral("Изменения внесены. Нажмите «Сохранить», чтобы записать их в Excel."), 10000);
@@ -253,7 +271,9 @@ void DocumentController::undo()
 {
     if (!m_model->canUndo())
         return;
+    const QString text = m_model->undoText();
     m_model->undo();
+    log(QStringLiteral("undo"), text);
     m_window->statusBar()->showMessage(QStringLiteral("Последнее изменение отменено"), 5000);
 }
 
@@ -346,7 +366,13 @@ void DocumentController::withdrawSelected()
     WithdrawDialog dialog(m_model->sheet(), rows, m_window);
     if (dialog.exec() != QDialog::Accepted)
         return;
+    const QString described = describeRows(rows);
     const int count = m_model->withdraw(rows, dialog.date(), dialog.reason(), dialog.note());
+    QString details = QStringLiteral("%1, причина: %2").arg(dialog.date().toString(QStringLiteral("dd.MM.yyyy")),
+                                                           dialog.reason());
+    if (!dialog.note().trimmed().isEmpty())
+        details += QStringLiteral(", примечание: %1").arg(dialog.note().trimmed());
+    log(QStringLiteral("withdraw"), QStringLiteral("%1. %2").arg(details, described), count);
     m_window->booksTable()->clearSelection();
     m_window->statusBar()->showMessage(
         QStringLiteral("Оформлено выбытие %1 экз. Они на вкладке «Выбывшие». "
@@ -363,7 +389,9 @@ void DocumentController::restoreSelected()
                                  QStringLiteral("Сначала выделите в списке выбывших экземпляры, которые нужно вернуть."));
         return;
     }
+    const QString described = describeRows(rows);
     const int count = m_model->restore(rows);
+    log(QStringLiteral("return"), described, count);
     m_window->statusBar()->showMessage(
         QStringLiteral("Возвращено в фонд: %1 экз. Они снова на вкладке «Книги».").arg(count), 10000);
 }
@@ -424,6 +452,8 @@ void DocumentController::createReport()
         if (m_model->isWithdrawn(row))
             reportedIds << m_model->index(row, 0).data(models::FundTableModel::IdRole).toString();
     }
+
+    log(QStringLiteral("report"), QDir::toNativeSeparators(path), reportedIds.size());
 
     QMessageBox box(m_window);
     box.setIcon(QMessageBox::Question);
@@ -506,6 +536,10 @@ void DocumentController::cleanupReported(const QStringList &ids)
     rememberDiskCounts();
     m_window->setUnsavedChanges(false);
     refreshVersions();
+    log(QStringLiteral("cleanup"),
+        QStringLiteral("Строки перенесены на лист «%1». Резервная копия до очистки: %2")
+            .arg(core::archiveSheetName(), QFileInfo(backup).fileName()),
+        moved);
     QMessageBox::information(
         m_window, QStringLiteral("Очистка выбывших"),
         QStringLiteral("Очищено %1 экз. Их строки — на листе «%2» рабочей копии.\n\nРезервная копия до очистки:\n%3")
@@ -603,7 +637,8 @@ bool DocumentController::openFile(const QString &path)
     QString error;
     const QString workPath = m_workCopies.create(path, &error);
     if (workPath.isEmpty()) {
-        showError(QStringLiteral("Не удалось открыть файл"), error);
+        showError(QStringLiteral("Не удалось открыть файл"),
+                  QStringLiteral("%1\n\n%2").arg(QDir::toNativeSeparators(path), error));
         return false;
     }
 
@@ -651,6 +686,18 @@ bool DocumentController::openFile(const QString &path)
     m_window->setUnsavedChanges(false);
 
     showWorkbook(layout, QFileInfo(path).fileName());
+    const core::FundSheet &sheet = m_model->sheet();
+    if (imported) {
+        log(QStringLiteral("import"),
+            QStringLiteral("Лист «%1», названия столбцов в строке %2. Рабочая копия: %3")
+                .arg(layout.sheet)
+                .arg(layout.headerRow)
+                .arg(QFileInfo(workPath).fileName()),
+            sheet.records.size());
+    } else {
+        log(QStringLiteral("open"), QStringLiteral("Рабочая копия: %1").arg(QFileInfo(workPath).fileName()),
+            sheet.records.size());
+    }
     if (imported && m_model->rowCount() > 0)
         finishImport(withdrawnMarks);
     return true;
@@ -724,11 +771,16 @@ void DocumentController::finishImport(const QSet<QString> &withdrawnMarks)
         byMark[it.value()].push_back(it.key());
     const QDate today = QDate::currentDate();
     int total = 0;
+    QStringList perMark;
     for (auto it = byMark.begin(); it != byMark.end(); ++it) {
         std::sort(it->begin(), it->end());
-        total += m_model->withdraw(*it, today, core::markWithdrawalReason(),
-                                   QStringLiteral("пометка «%1»").arg(it.key()));
+        const int n = m_model->withdraw(*it, today, core::markWithdrawalReason(),
+                                        QStringLiteral("пометка «%1»").arg(it.key()));
+        perMark << QStringLiteral("«%1» — %2 экз.").arg(it.key()).arg(n);
+        total += n;
     }
+    log(QStringLiteral("withdraw"),
+        QStringLiteral("%1: %2").arg(core::markWithdrawalReason(), perMark.join(QStringLiteral(", "))), total);
     updateCounts();
     m_window->statusBar()->showMessage(
         QStringLiteral("По пометкам в файле отмечено выбывшими %1 экз. Они на вкладке «Выбывшие». "
@@ -787,6 +839,8 @@ void DocumentController::save()
     rememberDiskCounts();
     m_window->setUnsavedChanges(false);
     refreshVersions();
+    log(QStringLiteral("save"),
+        QStringLiteral("В фонде %1 экз., выбывших %2.%3").arg(m_diskBooks).arg(m_diskWithdrawn).arg(backupWarning));
     m_window->statusBar()->showMessage(QStringLiteral("Изменения сохранены в рабочую копию.") + backupWarning, 5000);
 }
 
@@ -874,6 +928,8 @@ void DocumentController::restoreVersion(const QString &backupPath)
     }
     showWorkbook(core::ImportLayout::load(m_workbook), QFileInfo(m_originalPath).fileName());
     m_window->setUnsavedChanges(false);
+    log(QStringLiteral("restore"),
+        QStringLiteral("Возвращена версия от %1. Прежний файл: %2").arg(when, QFileInfo(safety).fileName()));
     m_window->statusBar()->showMessage(
         QStringLiteral("Возвращена версия от %1. Прежний файл сохранён копией «перед восстановлением».").arg(when));
 }
@@ -962,6 +1018,10 @@ void DocumentController::exportData()
         showError(QStringLiteral("Не удалось выгрузить"), error);
         return;
     }
+    log(QStringLiteral("export"),
+        QStringLiteral("%1, %2: %3")
+            .arg(exporter.title, csv ? QStringLiteral("CSV") : QStringLiteral("Excel"), QDir::toNativeSeparators(path)),
+        exporter.records.size());
     m_window->statusBar()->showMessage(QStringLiteral("Выгружено %1 экз. в %2")
                                            .arg(exporter.records.size())
                                            .arg(QDir::toNativeSeparators(path)));
@@ -997,6 +1057,7 @@ void DocumentController::saveAs()
         return;
     }
     m_model->markSaved();
+    log(QStringLiteral("save"), QStringLiteral("Сохранён как %1").arg(QDir::toNativeSeparators(path)));
     settings.setValue(kLastDirKey, QFileInfo(path).absolutePath());
     // Дальше программа работает с новым файлом.
     m_workPath = path;
@@ -1030,7 +1091,67 @@ bool DocumentController::confirmDiscardChanges()
 
 void DocumentController::showError(const QString &title, const QString &text)
 {
+    log(QStringLiteral("error"), QStringLiteral("%1: %2").arg(title, QString(text).replace(QLatin1Char('\n'), QLatin1Char(' ')).simplified()));
     QMessageBox::warning(m_window, title, text);
+}
+
+void DocumentController::log(const QString &action, const QString &details, int count)
+{
+    const QString fund = m_originalPath.isEmpty() ? QString() : QFileInfo(m_originalPath).fileName();
+    QString text = details.trimmed();
+    if (!text.isEmpty())
+        text[0] = text.at(0).toUpper();
+    m_log.append(action, fund, text, count);
+    if (m_window->isLogTabActive())
+        refreshLog();
+}
+
+QString DocumentController::describeRecord(const QVector<QVariant> &values) const
+{
+    const core::FundSheet &sheet = m_model->sheet();
+    QStringList parts;
+    const int inventory = sheet.columnIndex(core::ColumnRole::Inventory);
+    if (inventory >= 0) {
+        const QString inv = core::displayText(values.value(inventory));
+        parts << (inv.isEmpty() ? QStringLiteral("без инв. №") : QStringLiteral("инв. № %1").arg(inv));
+    }
+    const int author = sheet.columnIndex(core::ColumnRole::AuthorTitle);
+    if (author >= 0) {
+        QString title = core::displayText(values.value(author));
+        if (title.size() > 60)
+            title = title.left(58).trimmed() + QStringLiteral("…");
+        if (!title.isEmpty())
+            parts << QStringLiteral("«%1»").arg(title);
+    }
+    return parts.join(QStringLiteral(", "));
+}
+
+QString DocumentController::describeRows(const QVector<int> &rows) const
+{
+    const core::FundSheet &sheet = m_model->sheet();
+    QStringList parts;
+    for (int i = 0; i < rows.size() && i < 3; ++i) {
+        if (rows.at(i) >= 0 && rows.at(i) < sheet.records.size())
+            parts << describeRecord(sheet.records.at(rows.at(i)).values);
+    }
+    QString text = parts.join(QStringLiteral("; "));
+    if (rows.size() > 3)
+        text += QStringLiteral(" и ещё %1 экз.").arg(rows.size() - 3);
+    return text;
+}
+
+void DocumentController::refreshLog()
+{
+    const QString fund = m_logCurrentOnly && !m_originalPath.isEmpty() ? QFileInfo(m_originalPath).fileName()
+                                                                        : QString();
+    m_window->setLog(m_log.read(500, fund), fund);
+}
+
+void DocumentController::openLogFolder()
+{
+    const QString dir = QFileInfo(m_log.path()).absolutePath();
+    QDir().mkpath(dir);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
 }
 
 } // namespace bh::ui

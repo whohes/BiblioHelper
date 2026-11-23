@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/action_log.h"
 #include "core/work_copy.h"
 
 #include <QMainWindow>
@@ -7,6 +8,7 @@
 
 class QAbstractItemModel;
 
+class QCheckBox;
 class QLabel;
 class QStackedWidget;
 class QTableView;
@@ -45,6 +47,9 @@ public:
     void setUndoText(const QString &text);
     // Список прошлых версий (резервных копий) на вкладке «Импорт и экспорт».
     void setVersions(const QVector<core::WorkCopies::BackupInfo> &versions);
+    // Журнал действий на вкладке «Журнал»; fund — чей журнал показан (пусто — всех фондов).
+    void setLog(const QVector<core::LogEntry> &entries, const QString &fund);
+    bool isLogTabActive() const;
 
 signals:
     void openRequested();
@@ -63,6 +68,9 @@ signals:
     void restoreVersionRequested(const QString &backupPath);
     void openBackupFolderRequested();
     void versionsTabShown();
+    void logTabShown();
+    void logScopeChanged(bool currentFundOnly);
+    void openLogFolderRequested();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -73,6 +81,7 @@ private:
     QWidget *createBooksTab();
     QWidget *createWithdrawnTab();
     QWidget *createImportExportTab();
+    QWidget *createLogTab();
     QWidget *createHelpTab();
     QPushButton *createActionButton(const QString &text, const QString &toolTip);
     void updateDocumentActions();
@@ -102,6 +111,10 @@ private:
     QPushButton *m_openBackups = nullptr;
     QLabel *m_versionsEmpty = nullptr;
     QVector<core::WorkCopies::BackupInfo> m_versionList;
+    QWidget *m_logTab = nullptr;
+    QTableWidget *m_log = nullptr;
+    QCheckBox *m_logCurrentOnly = nullptr;
+    QLabel *m_logEmpty = nullptr;
 
     QString m_workFileName;
     bool m_unsaved = false;
