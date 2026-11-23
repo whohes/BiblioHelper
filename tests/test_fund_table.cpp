@@ -225,12 +225,12 @@ void FundTableTest::fontColors()
     const auto b = countMarks(bobrinka);
     // Числа сверены с openpyxl: непустые цветные ячейки в строках книг
     // (пустая ячейка с цветом пометкой не считается).
-    QCOMPARE(b.value(QStringLiteral("Синий шрифт")), 253);
-    QCOMPARE(b.value(QStringLiteral("Красный шрифт")), 111);
+    QCOMPARE(b.value(QStringLiteral("Устаревшая")), 253);
+    QCOMPARE(b.value(QStringLiteral("Ветхая")), 111);
 
     const auto bogdanovka = sheetWithColors(QStringLiteral("fund_bogdanovka_2025.xlsx"));
     const auto g = countMarks(bogdanovka);
-    QVERIFY(g.value(QStringLiteral("Красный шрифт")) >= 13);
+    QVERIFY(g.value(QStringLiteral("Ветхая")) >= 13);
     QCOMPARE(g.size(), 1);
 
     // Цвет виден в таблице.

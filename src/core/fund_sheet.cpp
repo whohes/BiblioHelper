@@ -32,6 +32,19 @@ QString columnLetter(int column)
     return letters;
 }
 
+// Значение цветовых пометок в фондах (уточнено у библиотеки):
+// красный шрифт — ветхая книга, синий — устаревшая по содержанию.
+QString colorMarkLabel(const QString &colorName)
+{
+    if (colorName.isEmpty())
+        return {};
+    if (colorName == QLatin1String("Красный"))
+        return QStringLiteral("Ветхая");
+    if (colorName == QLatin1String("Синий"))
+        return QStringLiteral("Устаревшая");
+    return colorName + QStringLiteral(" шрифт");
+}
+
 bool isFilled(const QVariant &v)
 {
     if (!v.isValid() || v.isNull())
@@ -223,7 +236,7 @@ void FundSheetReader::applyFontColors(FundSheet *sheet, const io::FontColors &co
                 continue;
             rowColors[c] = it.value();
             rowHas = true;
-            const QString name = io::colorName(it.value());
+            const QString name = colorMarkLabel(io::colorName(it.value()));
             if (!name.isEmpty() && !names.contains(name))
                 names << name;
         }
@@ -231,7 +244,7 @@ void FundSheetReader::applyFontColors(FundSheet *sheet, const io::FontColors &co
             continue;
         record.colors = rowColors;
         names.sort();
-        marks[i] = names.join(QStringLiteral(", ")) + QStringLiteral(" шрифт");
+        marks[i] = names.join(QStringLiteral(", "));
         any = true;
     }
     if (!any)
