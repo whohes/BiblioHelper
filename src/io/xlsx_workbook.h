@@ -82,6 +82,14 @@ public:
     QString cellFormula(const QString &sheet, int row, int column) const;
 
     // Записать значение (заменяет и формулу, если она была).
+    // Оформление ячейки (шрифт, границы, формат) — как у соседней ячейки той же строки.
+    bool copyCellStyle(const QString &sheet, int row, int fromColumn, int toColumn, QString *error = nullptr);
+    // Альбомная печать по ширине, закреплённая шапка и автофильтр (для отчётов).
+    bool setReportLayout(const QString &sheet, int headerRow, const QString &filterRef, QString *error = nullptr);
+    // Ширина столбца в символах (как в Excel).
+    bool setColumnWidth(const QString &sheet, int column, double width, QString *error = nullptr);
+    // Расширить автофильтр (начинается в headerRow) вправо до lastColumn.
+    bool extendAutoFilter(const QString &sheet, int headerRow, int lastColumn, QString *error = nullptr);
     bool setCellValue(const QString &sheet, int row, int column, const QVariant &value,
                       QString *error = nullptr);
 

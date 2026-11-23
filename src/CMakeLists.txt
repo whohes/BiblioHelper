@@ -4,6 +4,8 @@ add_library(bh_core STATIC
     core/copy_ids.cpp
     core/fund_sheet.h
     core/fund_sheet.cpp
+    core/withdrawal_report.h
+    core/withdrawal_report.cpp
     core/work_copy.h
     core/work_copy.cpp
     io/xlsx_font_colors.h
@@ -35,9 +37,13 @@ add_executable(BiblioHelper WIN32
     ui/filter_header_view.h
     ui/filter_header_view.cpp
     ui/filter_popup.h
+    ui/fund_table_page.h
+    ui/fund_table_page.cpp
     ui/filter_popup.cpp
     ui/record_dialog.h
     ui/record_dialog.cpp
+    ui/withdraw_dialog.h
+    ui/withdraw_dialog.cpp
     ui/main_window.h
     ui/main_window.cpp
     resources/resources.qrc

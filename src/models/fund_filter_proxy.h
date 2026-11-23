@@ -48,6 +48,12 @@ public:
     // Текст для показа пустых ячеек в списке значений фильтра.
     static QString emptyValueLabel();
 
+    // Какие экземпляры показывать: действующие (вкладка «Книги»),
+    // выбывшие (вкладка «Выбывшие») или все.
+    enum class StatusFilter { All, Active, Withdrawn };
+    void setStatusFilter(StatusFilter filter);
+    StatusFilter statusFilter() const { return m_status; }
+
     // Поиск: все слова запроса должны встретиться в строке (в любом столбце).
     void setSearchText(const QString &text);
     QString searchText() const { return m_searchText; }
@@ -102,6 +108,7 @@ private:
     QHash<int, QSet<QString>> m_columnFilters;
     QHash<int, ColumnCondition> m_conditions;
     QCollator m_collator;
+    StatusFilter m_status = StatusFilter::All;
 };
 
 } // namespace bh::models

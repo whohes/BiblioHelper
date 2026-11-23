@@ -22,8 +22,8 @@ QString CopyIds::fingerprint(const FundSheet &sheet, const FundRecord &record)
 {
     QByteArray data;
     for (int c = 0; c < sheet.columns.size() && c < record.values.size(); ++c) {
-        if (sheet.columns.at(c).excelColumn <= 0)
-            continue;  // вычисляемые столбцы (цветовая пометка) не в счёт
+        if (sheet.columns.at(c).excelColumn <= 0 || sheet.columns.at(c).role == ColumnRole::Status)
+            continue;  // вычисляемые столбцы и «Статус» (его пишет программа) не в счёт
         data += normalizeForSearch(displayText(record.values.at(c))).toUtf8();
         data += '\x1f';
     }
@@ -36,7 +36,7 @@ QVector<CopyIds::Entry> CopyIds::load(const io::XlsxWorkbook &workbook)
     if (!workbook.sheetNames().contains(sheetName()))
         return entries;
     const io::SheetSize size = workbook.sheetSize(sheetName());
-    const auto rows = workbook.readRows(sheetName(), 2, std::max(size.rows, 2), 4);
+    const auto rows = workbook.readRows(sheetName(), 2, std::max(size.rows, 2), 7);
     entries.reserve(rows.size());
     for (const auto &row : rows) {
         Entry e;
@@ -44,6 +44,9 @@ QVector<CopyIds::Entry> CopyIds::load(const io::XlsxWorkbook &workbook)
         e.sheet = row.values.value(1).toString();
         e.row = row.values.value(2).toString().toInt();
         e.fingerprint = row.values.value(3).toString();
+        e.withdrawnOn = row.values.value(4).toString();
+        e.reason = row.values.value(5).toString();
+        e.note = row.values.value(6).toString();
         if (!e.copyId.isEmpty())
             entries.push_back(e);
     }
@@ -57,11 +60,23 @@ bool CopyIds::save(io::XlsxWorkbook &workbook, const FundSheet &sheet, QString *
     QVector<QStringList> rows;
     rows.reserve(sheet.records.size() + 1);
     rows.push_back({QStringLiteral("copy_id"), QStringLiteral("sheet"), QStringLiteral("row"),
-                    QStringLiteral("fingerprint")});
+                    QStringLiteral("fingerprint"), QStringLiteral("withdrawn_on"), QStringLiteral("reason"),
+                    QStringLiteral("note")});
+    const int dateCol = sheet.columnIndex(ColumnRole::WithdrawDate);
+    const int reasonCol = sheet.columnIndex(ColumnRole::WithdrawReason);
+    const int noteCol = sheet.columnIndex(ColumnRole::WithdrawNote);
+    auto text = [](const FundRecord &record, int column) {
+        return column >= 0 && column < record.values.size() ? displayText(record.values.at(column)) : QString();
+    };
     for (const FundRecord &record : sheet.records) {
         if (record.id.isEmpty() || record.excelRow <= 0)
             continue;
-        rows.push_back({record.id, sheet.sheetName, QString::number(record.excelRow), fingerprint(sheet, record)});
+        QStringList row{record.id, sheet.sheetName, QString::number(record.excelRow), fingerprint(sheet, record)};
+        if (sheet.isWithdrawn(record)) {
+            row << record.values.at(dateCol).toDate().toString(Qt::ISODate) << text(record, reasonCol)
+                << text(record, noteCol);
+        }
+        rows.push_back(row);
     }
     return workbook.replaceSheetText(sheetName(), rows, error);
 }
@@ -123,6 +138,32 @@ int CopyIds::assign(FundSheet *sheet, const QVector<Entry> &entries)
         if (record.id.isEmpty()) {
             record.id = newId();
             ++created;
+        }
+    }
+
+    // Сведения о выбытии — по найденному ID.
+    const int dateCol = sheet->columnIndex(ColumnRole::WithdrawDate);
+    const int reasonCol = sheet->columnIndex(ColumnRole::WithdrawReason);
+    const int noteCol = sheet->columnIndex(ColumnRole::WithdrawNote);
+    if (dateCol >= 0) {
+        QHash<QString, int> byId;
+        for (int i = 0; i < entries.size(); ++i) {
+            if (used[i])
+                byId.insert(entries.at(i).copyId, i);
+        }
+        for (FundRecord &record : sheet->records) {
+            const auto it = byId.constFind(record.id);
+            if (it == byId.constEnd())
+                continue;
+            const Entry &e = entries.at(*it);
+            const QDate date = QDate::fromString(e.withdrawnOn, Qt::ISODate);
+            if (!date.isValid())
+                continue;
+            record.values[dateCol] = date;
+            if (reasonCol >= 0)
+                record.values[reasonCol] = e.reason.isEmpty() ? QVariant() : QVariant(e.reason);
+            if (noteCol >= 0)
+                record.values[noteCol] = e.note.isEmpty() ? QVariant() : QVariant(e.note);
         }
     }
     return created;

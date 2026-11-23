@@ -350,6 +350,74 @@ QString XlsxWorkbook::cellFormula(const QString &sheet, int row, int column) con
     }
 }
 
+bool XlsxWorkbook::copyCellStyle(const QString &sheet, int row, int fromColumn, int toColumn, QString *error)
+{
+    if (!isOpen() || !validCoordinates(row, fromColumn) || !validCoordinates(row, toColumn)) {
+        setError(error, QStringLiteral("Неверная ячейка: строка %1").arg(row));
+        return false;
+    }
+    try {
+        auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
+        auto source = ws.findCell(static_cast<uint32_t>(row), static_cast<uint16_t>(fromColumn));
+        if (source.empty())
+            return true;  // у соседней ячейки нет оформления — оставляем обычное
+        auto target = ws.cell(static_cast<uint32_t>(row), static_cast<uint16_t>(toColumn));
+        target.setCellFormat(source.cellFormat());
+        return true;
+    } catch (const std::exception &e) {
+        setError(error, QStringLiteral("Не удалось оформить ячейку: %1").arg(fromUtf8(e.what())));
+        return false;
+    }
+}
+
+bool XlsxWorkbook::setColumnWidth(const QString &sheet, int column, double width, QString *error)
+{
+    if (!isOpen() || !validCoordinates(1, column)) {
+        setError(error, QStringLiteral("Неверный столбец %1").arg(column));
+        return false;
+    }
+    try {
+        auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
+        ws.column(static_cast<uint16_t>(column)).setWidth(static_cast<float>(width));
+        return true;
+    } catch (const std::exception &e) {
+        setError(error, QStringLiteral("Не удалось задать ширину столбца: %1").arg(fromUtf8(e.what())));
+        return false;
+    }
+}
+
+bool XlsxWorkbook::setReportLayout(const QString &sheet, int headerRow, const QString &filterRef, QString *error)
+{
+    if (!isOpen()) {
+        setError(error, QStringLiteral("Файл не открыт"));
+        return false;
+    }
+    try {
+        auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
+        sheetxml::setReportLayout(XmlAccess::of(ws).document_element(), headerRow, filterRef);
+        return true;
+    } catch (const std::exception &e) {
+        setError(error, QStringLiteral("Не удалось настроить печать: %1").arg(fromUtf8(e.what())));
+        return false;
+    }
+}
+
+bool XlsxWorkbook::extendAutoFilter(const QString &sheet, int headerRow, int lastColumn, QString *error)
+{
+    if (!isOpen()) {
+        setError(error, QStringLiteral("Файл не открыт"));
+        return false;
+    }
+    try {
+        auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
+        sheetxml::extendAutoFilter(XmlAccess::of(ws).document_element(), headerRow, lastColumn);
+        return true;
+    } catch (const std::exception &e) {
+        setError(error, QStringLiteral("Не удалось изменить автофильтр: %1").arg(fromUtf8(e.what())));
+        return false;
+    }
+}
+
 bool XlsxWorkbook::setCellValue(const QString &sheet, int row, int column, const QVariant &value,
                                 QString *error)
 {

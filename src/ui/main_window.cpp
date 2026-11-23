@@ -1,6 +1,7 @@
 #include "main_window.h"
 
 #include "filter_header_view.h"
+#include "fund_table_page.h"
 
 #include <QCloseEvent>
 #include <QHBoxLayout>
@@ -51,6 +52,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_fileLabel->setObjectName(QStringLiteral("fileLabel"));
     m_unsavedLabel = new QLabel(central);
     m_unsavedLabel->setObjectName(QStringLiteral("unsavedLabel"));
+    // Длинное имя файла сокращается, а надпись о несохранённых изменениях видна всегда.
+    m_fileLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     fileRow->addWidget(m_fileLabel, 1);
     fileRow->addWidget(m_unsavedLabel);
     layout->addLayout(fileRow);
@@ -64,6 +67,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_tabs->addTab(createImportExportTab(), QStringLiteral("Импорт и экспорт"));
     m_tabs->addTab(createHelpTab(), QStringLiteral("Справка"));
     layout->addWidget(m_tabs, 1);
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this] {
+        if (isWithdrawnTabActive())
+            emit withdrawnTabShown();
+    });
 
     setCentralWidget(central);
     statusBar()->showMessage(QStringLiteral("Откройте Excel-файл, чтобы начать работу"));
@@ -153,77 +160,52 @@ QWidget *MainWindow::createSearchRow()
 
 QWidget *MainWindow::createBooksTab()
 {
-    m_booksStack = new QStackedWidget;
-
-    m_booksMessage = createEmptyState(QStringLiteral(
+    m_booksPage = new FundTablePage(QStringLiteral(
         "Здесь появится список книг.\n\nНажмите «Открыть Excel» и выберите файл с книжным фондом."));
-    m_booksMessage->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_booksStack->addWidget(m_booksMessage);
-
-    auto *page = new QWidget;
-    auto *layout = new QVBoxLayout(page);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    m_booksTable = new QTableView(page);
-    m_booksHeader = new FilterHeaderView(m_booksTable);
-    m_booksTable->setHorizontalHeader(m_booksHeader);
-    m_booksTable->setSortingEnabled(true);
-    m_booksTable->setAlternatingRowColors(true);
-    m_booksTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_booksTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_booksTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_booksTable->setWordWrap(false);
-    m_booksTable->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
-    m_booksTable->verticalHeader()->setDefaultSectionSize(m_booksTable->fontMetrics().height() + 14);
-    m_booksTable->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-    m_booksTable->verticalHeader()->setToolTip(QStringLiteral("Номер строки в Excel"));
-    layout->addWidget(m_booksTable, 1);
-
-    m_countLabel = new QLabel(page);
-    m_countLabel->setObjectName(QStringLiteral("countLabel"));
-    layout->addWidget(m_countLabel);
-
-    m_booksStack->addWidget(page);
-    return m_booksStack;
+    return m_booksPage;
 }
 
-void MainWindow::setBooksMessage(const QString &text)
+QWidget *MainWindow::createWithdrawnTab()
 {
-    m_booksMessage->setText(text);
-    m_booksStack->setCurrentIndex(0);
+    m_withdrawnPage = new FundTablePage(QStringLiteral(
+        "Здесь будут выбывшие экземпляры.\n\nОткройте файл, выберите экземпляры на вкладке «Книги» "
+        "и нажмите «Выбытие»."));
+    m_restore = createActionButton(QStringLiteral("Вернуть в фонд"),
+                                   QStringLiteral("Отменить выбытие выбранных экземпляров: они вернутся на вкладку «Книги»"));
+    m_report = createActionButton(QStringLiteral("Сформировать Excel"),
+                                  QStringLiteral("Сохранить список выбывших в новый Excel-файл (отчёт). "
+                                                 "Если выбраны строки — только их."));
+    m_withdrawnPage->addButton(m_report);
+    m_withdrawnPage->addButton(m_restore);
+    connect(m_restore, &QPushButton::clicked, this, &MainWindow::restoreRequested);
+    connect(m_report, &QPushButton::clicked, this, &MainWindow::reportRequested);
+    return m_withdrawnPage;
 }
 
-void MainWindow::showBooksTable(QAbstractItemModel *model)
+QTableView *MainWindow::booksTable() const
 {
-    m_booksTable->setModel(model);
-    m_booksTable->sortByColumn(-1, Qt::AscendingOrder);  // порядок как в файле
-    m_booksHeader->setSortIndicator(-1, Qt::AscendingOrder);
-    m_booksStack->setCurrentIndex(1);
+    return m_booksPage->table();
+}
+
+FilterHeaderView *MainWindow::booksHeader() const
+{
+    return m_booksPage->header();
+}
+
+bool MainWindow::isWithdrawnTabActive() const
+{
+    return m_tabs->currentWidget() == m_withdrawnPage;
+}
+
+void MainWindow::showWithdrawnTab()
+{
+    m_tabs->setCurrentWidget(m_withdrawnPage);
 }
 
 void MainWindow::setUndoText(const QString &text)
 {
     m_undo->setEnabled(!text.isEmpty());
     m_undo->setToolTip(text.isEmpty() ? QStringLiteral("Отменять нечего") : text + QStringLiteral(" (Ctrl+Z)"));
-}
-
-void MainWindow::setRecordCount(int shown, int total, bool filtered, const QString &sumText)
-{
-    const QString sum = sumText.isEmpty() ? QString() : QStringLiteral(" ") + sumText;
-    m_countLabel->setText(filtered
-                              ? QStringLiteral("Показано %1 из %2 экземпляров%3. Включены поиск или фильтры — "
-                                               "«Сбросить фильтры» покажет все.").arg(shown).arg(total).arg(sum)
-                              : QStringLiteral("Всего экземпляров: %1%2").arg(total).arg(sum));
-    m_countLabel->setProperty("filtered", filtered);
-    m_countLabel->style()->unpolish(m_countLabel);
-    m_countLabel->style()->polish(m_countLabel);
-}
-
-QWidget *MainWindow::createWithdrawnTab()
-{
-    return createEmptyState(QStringLiteral(
-        "Здесь будут выбывшие экземпляры.\n\nВыбытие оформляется кнопкой «Выбытие» на вкладке «Книги»."));
 }
 
 QWidget *MainWindow::createImportExportTab()
@@ -255,6 +237,17 @@ QWidget *MainWindow::createHelpTab()
         "«Устаревшая» — по нему можно отфильтровать, например, все ветхие книги.</p>"
         "<p>Кнопка <b>«Сбросить фильтры»</b> снова показывает все книги.</p>"
         "<p>Слева у каждой строки — её номер в Excel-файле.</p>"
+        "<h2>Выбытие</h2>"
+        "<p>1. На вкладке «Книги» выделите экземпляры, которые выбывают. Несколько строк — щелчками "
+        "с нажатой клавишей <b>Ctrl</b>, подряд — с <b>Shift</b>.</p>"
+        "<p>2. Нажмите <b>«Выбытие»</b>, проверьте список, укажите дату и причину, при необходимости примечание "
+        "(например, номер акта), и нажмите «Оформить выбытие».</p>"
+        "<p>3. Экземпляры уйдут с вкладки «Книги» на вкладку <b>«Выбывшие»</b>. Из файла они не удаляются: "
+        "в Excel у них появится столбец <b>«Статус»</b> с текстом «Выбыло 23.11.2026, ветхость».</p>"
+        "<p>Ошиблись — нажмите «Отменить» (Ctrl+Z) или на вкладке «Выбывшие» выберите экземпляр и нажмите "
+        "<b>«Вернуть в фонд»</b>.</p>"
+        "<p><b>«Сформировать Excel»</b> на вкладке «Выбывшие» сохраняет отчёт: каждый экземпляр отдельной строкой, "
+        "с датой, причиной и итоговой суммой. Если выделены строки — в отчёт войдут только они, иначе все показанные.</p>"
         "<p>Подробная справка появится в следующих версиях программы.</p>"));
     return help;
 }
@@ -284,7 +277,7 @@ void MainWindow::setUnsavedChanges(bool unsaved)
 void MainWindow::updateDocumentActions()
 {
     const bool hasDocument = !m_workFileName.isEmpty();
-    for (auto *button : {m_saveAs, m_addBook, m_edit, m_withdraw, m_export, m_resetFilters})
+    for (auto *button : {m_saveAs, m_addBook, m_edit, m_withdraw, m_export, m_resetFilters, m_restore, m_report})
         button->setEnabled(hasDocument);
     m_save->setEnabled(hasDocument && m_unsaved);
     m_search->setEnabled(hasDocument);

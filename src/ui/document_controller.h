@@ -8,12 +8,17 @@
 #include <QObject>
 #include <QTimer>
 
+class QTableView;
+
 namespace bh::ui {
 
+class FundTablePage;
 class MainWindow;
 
 // Связывает кнопки главного окна с рабочим файлом: открыть (через
-// рабочую копию), сохранить, сохранить как.
+// рабочую копию), сохранить, правка, выбытие, отчёт.
+// Обе вкладки («Книги» и «Выбывшие») показывают одну модель через
+// разные фильтры: действующие и выбывшие экземпляры.
 class DocumentController : public QObject
 {
     Q_OBJECT
@@ -28,19 +33,26 @@ private slots:
     void open();
     void save();
     void saveAs();
-    void showColumnFilter(int column, const QPoint &globalPos);
+    void showColumnFilter(FundTablePage *page, models::FundFilterProxy *proxy, int column,
+                          const QPoint &globalPos);
     void addBook();
     void editSelected();
     void editRow(int modelRow);
     void undo();
+    void withdrawSelected();
+    void restoreSelected();
+    void createReport();
     void updateCounts();
-    QString sumText() const;
-    void fitColumns();
+    void fitColumns(QTableView *table);
+    void updateColumnVisibility();
     void selectRecord(const QString &id);
     QString duplicateInventoryText(const QString &inventory, const QString &exceptId) const;
 
 private:
     bool confirmDiscardChanges();
+    // Строки модели, выделенные в таблице (по порядку на экране).
+    QVector<int> selectedModelRows(QTableView *table, models::FundFilterProxy *proxy) const;
+    QString countText(models::FundFilterProxy *proxy, bool withdrawn) const;
     void showError(const QString &title, const QString &text);
 
     MainWindow *m_window;
@@ -50,9 +62,11 @@ private:
     QString m_workPath;
 
     models::FundTableModel *m_model;
-    models::FundFilterProxy *m_proxy;
+    models::FundFilterProxy *m_proxy;           // «Книги»: действующие
+    models::FundFilterProxy *m_withdrawnProxy;  // «Выбывшие»
     QTimer m_searchTimer;  // поиск запускается после паузы в наборе
     QString m_pendingSearch;
+    bool m_fitWithdrawnPending = false;
 };
 
 } // namespace bh::ui
