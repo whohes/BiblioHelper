@@ -40,11 +40,16 @@ jobs:
         run: cmake --build build -j 4
 
       - name: Автотесты
+        env:
+          QT_FORCE_STDERR_LOGGING: 1
         run: ctest --test-dir build --output-on-failure
 
       - name: Подробности, если тесты упали
         if: failure()
         shell: pwsh
+        env:
+          # Без консоли Qt пишет сообщения в OutputDebugString, а не в лог.
+          QT_FORCE_STDERR_LOGGING: 1
         run: |
           Get-Command libstdc++-6.dll, libgcc_s_dw2-1.dll, Qt5Core.dll -All -ErrorAction SilentlyContinue | Format-Table Source
           & build\tests\test_xlsx_roundtrip.exe -v1
