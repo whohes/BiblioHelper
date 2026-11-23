@@ -6,6 +6,7 @@
 // с исходником.
 
 #include "core/work_copy.h"
+#include "io/sheet_xml_rows.h"
 #include "io/xlsx_workbook.h"
 
 #include <QCryptographicHash>
@@ -108,6 +109,9 @@ private slots:
     void roundtrip();
     void cyrillicPath();
     void cyrillicTempFolder();
+    void appendRows_data();
+    void appendRows();
+    void shiftReferences();
     void workCopies();
 
 private:
@@ -321,6 +325,98 @@ void XlsxRoundtripTest::cyrillicTempFolder()
 
 // Свой main вместо QTEST_GUILESS_MAIN: если тест аварийно завершится
 // (std::terminate), вывод не потеряется в буфере и будет видна причина.
+void XlsxRoundtripTest::shiftReferences()
+{
+    using bh::io::sheetxml::shiftReferences;
+    // Итог по данным растягивается, ссылки внутри данных не трогаются.
+    QCOMPARE(shiftReferences(QStringLiteral("SUM(D3:D8245)"), 8245, 2), QStringLiteral("SUM(D3:D8247)"));
+    QCOMPARE(shiftReferences(QStringLiteral("$B$511"), 8245, 2), QStringLiteral("$B$511"));
+    QCOMPARE(shiftReferences(QStringLiteral("A8246"), 8245, 2), QStringLiteral("A8248"));
+    QCOMPARE(shiftReferences(QStringLiteral("A2:J8245"), 8245, 1), QStringLiteral("A2:J8246"));
+    QCOMPARE(shiftReferences(QStringLiteral("A3144:B3146"), 3143, 1), QStringLiteral("A3145:B3147"));
+    // Не ссылки: имена функций, текст в кавычках, другие листы.
+    QCOMPARE(shiftReferences(QStringLiteral("LOG10(A9000)"), 8245, 1), QStringLiteral("LOG10(A9001)"));
+    QCOMPARE(shiftReferences(QStringLiteral("\"A9000\"&A9000"), 8245, 1), QStringLiteral("\"A9000\"&A9001"));
+    QCOMPARE(shiftReferences(QStringLiteral("Лист2!A9000+A9000"), 8245, 1), QStringLiteral("Лист2!A9000+A9001"));
+    QCOMPARE(shiftReferences(QStringLiteral("A1:A100"), 8245, 1), QStringLiteral("A1:A100"));
+}
+
+void XlsxRoundtripTest::appendRows_data()
+{
+    QTest::addColumn<QString>("file");
+    QTest::addColumn<int>("lastDataRow");
+    QTest::addColumn<QString>("filterBefore");
+    QTest::addColumn<QString>("filterAfter");
+
+    QTest::newRow("bogdanovka") << "fund_bogdanovka_2025.xlsx" << 3143 << "A5:J3143" << "A5:J3145";
+    QTest::newRow("bobrinka") << "fund_bobrinka.xlsx" << 8245 << "A2:J8245" << "A2:J8247";
+}
+
+void XlsxRoundtripTest::appendRows()
+{
+    QFETCH(QString, file);
+    QFETCH(int, lastDataRow);
+    QFETCH(QString, filterBefore);
+    QFETCH(QString, filterAfter);
+
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString work = tmp.filePath(QStringLiteral("work.xlsx"));
+    const QString saved = tmp.filePath(QStringLiteral("saved.xlsx"));
+    QVERIFY(QFile::copy(dataPath(file), work));
+
+    bh::io::XlsxWorkbook wb;
+    QString error;
+    QVERIFY2(wb.open(work, &error), qPrintable(error));
+    const QString sheet = wb.sheetNames().first();
+    // Что было под данными (итоги, пояснения) — должно уехать на 2 строки вниз.
+    QMap<int, QVariant> footer;
+    QMap<int, QString> footerFormula;
+    for (int r = lastDataRow + 1; r <= lastDataRow + 4; ++r) {
+        for (int c = 1; c <= 4; ++c) {
+            footer.insert(r * 100 + c, wb.cellValue(sheet, r, c));
+            footerFormula.insert(r * 100 + c, wb.cellFormula(sheet, r, c));
+        }
+    }
+
+    QVERIFY2(wb.appendRowsAfter(sheet, lastDataRow, 2, lastDataRow, &error), qPrintable(error));
+    QVERIFY(wb.setCellValue(sheet, lastDataRow + 1, 2, QStringLiteral("Новая книга 1"), &error));
+    QVERIFY(wb.setCellValue(sheet, lastDataRow + 2, 2, QStringLiteral("Новая книга 2"), &error));
+    QVERIFY(wb.setCellValue(sheet, lastDataRow + 2, 6, 2026, &error));
+    QVERIFY2(wb.saveAs(saved, &error), qPrintable(error));
+    wb.close();
+
+    bh::io::XlsxWorkbook out;
+    QVERIFY2(out.open(saved, &error), qPrintable(error));
+    QCOMPARE(out.cellValue(sheet, lastDataRow + 1, 2).toString(), QStringLiteral("Новая книга 1"));
+    QCOMPARE(out.cellValue(sheet, lastDataRow + 2, 6).toLongLong(), 2026LL);
+    for (auto it = footer.cbegin(); it != footer.cend(); ++it) {
+        const int r = it.key() / 100, c = it.key() % 100;
+        if (footerFormula.value(it.key()).isEmpty())
+            QCOMPARE(out.cellValue(sheet, r + 2, c), it.value());
+    }
+    if (file.contains(QLatin1String("bobrinka")))
+        QCOMPARE(out.cellFormula(sheet, lastDataRow + 3, 4), QStringLiteral("SUM(D3:D8247)"));
+
+    const auto before = zipParts(dataPath(file));
+    const auto after = zipParts(saved);
+    const QString sheetPart = QStringLiteral("xl/worksheets/sheet1.xml");
+    QVERIFY(firstMatch(before.value(sheetPart), QStringLiteral("<autoFilter ref=\"[^\"]*\"")).contains(filterBefore));
+    QVERIFY2(firstMatch(after.value(sheetPart), QStringLiteral("<autoFilter ref=\"[^\"]*\"")).contains(filterAfter),
+             qPrintable(firstMatch(after.value(sheetPart), QStringLiteral("<autoFilter ref=\"[^\"]*\""))));
+    // Новая строка оформлена как строка-образец (высота, стиль ячеек).
+    const QString templateRow = firstMatch(before.value(sheetPart),
+                                           QStringLiteral("<row r=\"%1\"[^>]*>").arg(lastDataRow));
+    const QString newRow = firstMatch(after.value(sheetPart),
+                                      QStringLiteral("<row r=\"%1\"[^>]*>").arg(lastDataRow + 1));
+    QCOMPARE(QString(newRow).replace(QString::number(lastDataRow + 1), QString()),
+             QString(templateRow).replace(QString::number(lastDataRow), QString()));
+    QVERIFY(after.value(QStringLiteral("xl/workbook.xml")).contains("fullCalcOnLoad=\"1\""));
+    // Строки данных выше не изменились.
+    QCOMPARE(firstMatch(after.value(sheetPart), QStringLiteral("<row r=\"10\".*?</row>")),
+             firstMatch(normalizedXml(before.value(sheetPart)), QStringLiteral("<row r=\"10\".*?</row>")));
+}
+
 int main(int argc, char *argv[])
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);

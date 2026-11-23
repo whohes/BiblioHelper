@@ -1,6 +1,9 @@
 #include "xlsx_workbook.h"
 
+#include "sheet_xml_rows.h"
+
 #include <OpenXLSX.hpp>
+#include <XLXmlParser.hpp>
 
 #include <QDir>
 #include <QFile>
@@ -17,6 +20,19 @@
 namespace bh::io {
 
 namespace {
+
+// Доступ к XML листа и книги: в OpenXLSX нет вставки строк и правки
+// автофильтра, а xmlDocument() защищён. Указатель на защищённый член,
+// взятый через наследника, разрешён стандартом и ничего не копирует.
+struct XmlAccess : OpenXLSX::XLXmlFile
+{
+    static OpenXLSX::XMLDocument &of(OpenXLSX::XLXmlFile &file)
+    {
+        using Getter = OpenXLSX::XMLDocument &(OpenXLSX::XLXmlFile::*)();
+        constexpr Getter getter = &XmlAccess::xmlDocument;
+        return (file.*getter)();
+    }
+};
 
 std::string toUtf8(const QString &s)
 {
@@ -267,6 +283,29 @@ QVector<SheetRow> XlsxWorkbook::readRows(const QString &sheet, int firstRow, int
         result.clear();
     }
     return result;
+}
+
+bool XlsxWorkbook::appendRowsAfter(const QString &sheet, int afterRow, int count, int templateRow,
+                                   QString *error)
+{
+    if (!isOpen()) {
+        setError(error, QStringLiteral("Файл не открыт"));
+        return false;
+    }
+    if (afterRow < 1 || count < 1 || afterRow + count > 1048576) {
+        setError(error, QStringLiteral("Неверный номер строки"));
+        return false;
+    }
+    try {
+        auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
+        sheetxml::insertRowsAfter(XmlAccess::of(ws).document_element(), afterRow, count, templateRow);
+        auto wb = m_doc->workbook();
+        sheetxml::requestFullCalcOnLoad(XmlAccess::of(wb).document_element());
+        return true;
+    } catch (const std::exception &e) {
+        setError(error, QStringLiteral("Не удалось добавить строки: %1").arg(fromUtf8(e.what())));
+        return false;
+    }
 }
 
 bool XlsxWorkbook::cellHasFormula(const QString &sheet, int row, int column) const
