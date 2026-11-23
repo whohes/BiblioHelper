@@ -1,5 +1,6 @@
 #include "fund_sheet.h"
 
+#include "io/xlsx_font_colors.h"
 #include "io/xlsx_workbook.h"
 
 #include <QLocale>
@@ -202,6 +203,51 @@ bool FundSheetReader::read(const io::XlsxWorkbook &workbook, const QString &shee
 
     *out = std::move(result);
     return true;
+}
+
+void FundSheetReader::applyFontColors(FundSheet *sheet, const io::FontColors &colors)
+{
+    if (colors.isEmpty() || sheet->columnIndex(ColumnRole::ColorMark) >= 0)
+        return;
+
+    QVector<QString> marks(sheet->records.size());
+    bool any = false;
+    for (int i = 0; i < sheet->records.size(); ++i) {
+        FundRecord &record = sheet->records[i];
+        QStringList names;
+        QVector<QRgb> rowColors(sheet->columns.size(), 0);
+        bool rowHas = false;
+        for (int c = 0; c < sheet->columns.size(); ++c) {
+            const auto it = colors.constFind({record.excelRow, sheet->columns.at(c).excelColumn});
+            if (it == colors.constEnd())
+                continue;
+            rowColors[c] = it.value();
+            rowHas = true;
+            const QString name = io::colorName(it.value());
+            if (!name.isEmpty() && !names.contains(name))
+                names << name;
+        }
+        if (!rowHas)
+            continue;
+        record.colors = rowColors;
+        names.sort();
+        marks[i] = names.join(QStringLiteral(", ")) + QStringLiteral(" шрифт");
+        any = true;
+    }
+    if (!any)
+        return;
+
+    FundColumn column;
+    column.excelColumn = 0;  // нет в Excel: вычисляется программой
+    column.title = QStringLiteral("Цветовая пометка");
+    column.role = ColumnRole::ColorMark;
+    sheet->columns.push_back(column);
+    for (int i = 0; i < sheet->records.size(); ++i) {
+        FundRecord &record = sheet->records[i];
+        record.values.push_back(marks.at(i).isEmpty() ? QVariant() : QVariant(marks.at(i)));
+        if (!record.colors.isEmpty())
+            record.colors.push_back(0);
+    }
 }
 
 bool FundSheetReader::readBestSheet(const io::XlsxWorkbook &workbook, FundSheet *out, QString *error)
