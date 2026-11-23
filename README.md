@@ -21,7 +21,7 @@
 ## Сборка
 
 Нужны Qt 5.15 (последняя версия Qt с поддержкой Windows 7) и CMake 3.16+.
-Код совместим и с Qt 6. Сторонние библиотеки (OpenXLSX, QXlsx) скачиваются
+Код совместим и с Qt 6. Сторонние библиотеки (OpenXLSX, QXlsx, libxls) скачиваются
 автоматически при первой настройке, нужен интернет.
 
 ```
@@ -35,6 +35,15 @@ ctest --test-dir build --output-on-failure
 артефакт `BiblioHelper-win32`.
 
 ## Библиотеки
+
+- [libxls](https://github.com/libxls/libxls) (BSD-2) — чтение старых файлов
+  `.xls`. Своего CMake у неё нет, цель `xls` собирается в
+  `cmake/Dependencies.cmake`. Перевод строк в UTF-8 заменён на свой
+  (`cmake/patches/libxls_portable.cmake`): на Windows 7 нет UTF-8 локали,
+  а iconv в MinGW нет. XLS и CSV сразу переводятся в рабочую копию `.xlsx`.
+- Мастер импорта (`src/ui/import_wizard.*`) сохраняет лист, строку
+  заголовков и назначение столбцов в скрытом листе `_BiblioHelperImport`
+  (`src/core/import_layout.*`); при следующем открытии файл читается по ним.
 
 - [OpenXLSX](https://github.com/troldal/OpenXLSX) (BSD-3) — рабочие копии XLSX.
   Правит только изменённые ячейки, стили, автофильтр, ширины столбцов и

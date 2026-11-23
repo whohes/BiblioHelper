@@ -1,5 +1,8 @@
 #include "work_copy.h"
 
+#include "csv_import.h"
+#include "xls_import.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -80,7 +83,11 @@ QString WorkCopies::create(const QString &original, QString *error) const
     }
 
     const QString base = source.completeBaseName();
-    const QString suffix = source.suffix().toLower();
+    const bool csv = source.suffix().compare(QLatin1String("csv"), Qt::CaseInsensitive) == 0
+        || source.suffix().compare(QLatin1String("txt"), Qt::CaseInsensitive) == 0;
+    const bool xls = source.suffix().compare(QLatin1String("xls"), Qt::CaseInsensitive) == 0;
+    // CSV и XLS сразу переводятся в XLSX: дальше рабочая копия — обычный файл Excel.
+    const QString suffix = csv || xls ? QStringLiteral("xlsx") : source.suffix().toLower();
     QString target;
     for (int n = 1;; ++n) {
         const QString name = n == 1
@@ -89,6 +96,23 @@ QString WorkCopies::create(const QString &original, QString *error) const
         target = QDir(m_dir).filePath(name);
         if (!QFileInfo::exists(target))
             break;
+    }
+
+    if (csv) {
+        CsvImport::Table table;
+        if (!CsvImport::read(original, &table, error) || !CsvImport::writeXlsx(table, target, error)) {
+            QFile::remove(target);
+            return {};
+        }
+        return target;
+    }
+    if (xls) {
+        QVector<XlsImport::Sheet> sheets;
+        if (!XlsImport::read(original, &sheets, error) || !XlsImport::writeXlsx(sheets, target, error)) {
+            QFile::remove(target);
+            return {};
+        }
+        return target;
     }
 
     if (!QFile::copy(original, target)) {

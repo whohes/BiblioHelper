@@ -1,5 +1,7 @@
 #include "fund_sheet.h"
 
+#include "import_layout.h"
+
 #include "io/xlsx_font_colors.h"
 #include "io/xlsx_workbook.h"
 
@@ -142,25 +144,49 @@ ColumnRole FundSheetReader::roleForHeader(const QString &header)
         return ColumnRole::Other;
     if (h == QStringLiteral("статус"))
         return ColumnRole::Status;
-    if (h.contains(QStringLiteral("автор")) || h.contains(QStringLiteral("назван")))
+    if (h.contains(QStringLiteral("автор")) || h.contains(QStringLiteral("назван")) || h.contains(QStringLiteral("заглав"))
+        || h.contains(QStringLiteral("наимен")))
         return ColumnRole::AuthorTitle;
     if (h.contains(QStringLiteral("инв")))
         return ColumnRole::Inventory;
-    if (h.contains(QStringLiteral("кол")) && (h.contains(QStringLiteral("во")) || h.contains(QStringLiteral("шт"))))
+    if ((h.contains(QStringLiteral("кол")) && (h.contains(QStringLiteral("во")) || h.contains(QStringLiteral("шт"))))
+        || h.startsWith(QStringLiteral("экз")))
         return ColumnRole::Quantity;
     if (h.contains(QStringLiteral("цена")) || h.contains(QStringLiteral("стоим")))
         return ColumnRole::Price;
     if (h.contains(QStringLiteral("год")))
         return ColumnRole::Year;
-    if (h.contains(QStringLiteral("отдел")) || h.contains(QStringLiteral("шифр")))
+    if (h.contains(QStringLiteral("отдел")) || h.contains(QStringLiteral("шифр")) || h.contains(QStringLiteral("ббк"))
+        || h.contains(QStringLiteral("раздел")))
         return ColumnRole::Department;
     if (h.startsWith(QChar(0x2116)) || h.contains(QStringLiteral("п/п")) || h.contains(QStringLiteral("пп")))
         return ColumnRole::Number;
+    // Столбцы, куда ставят отметки при проверке наличия.
+    for (const char *word : {"провер", "налич", "помет", "отмет", "сверк"}) {
+        if (h.contains(QString::fromUtf8(word)))
+            return ColumnRole::Mark;
+    }
     return ColumnRole::Other;
 }
 
 bool FundSheetReader::read(const io::XlsxWorkbook &workbook, const QString &sheet, FundSheet *out,
                            QString *error)
+{
+    return readSheet(workbook, sheet, 0, nullptr, out, error);
+}
+
+bool FundSheetReader::read(const io::XlsxWorkbook &workbook, const ImportLayout &layout, FundSheet *out,
+                           QString *error)
+{
+    if (!workbook.sheetNames().contains(layout.sheet)) {
+        setError(error, QStringLiteral("В файле нет листа «%1»").arg(layout.sheet));
+        return false;
+    }
+    return readSheet(workbook, layout.sheet, layout.headerRow, &layout.roles, out, error);
+}
+
+bool FundSheetReader::readSheet(const io::XlsxWorkbook &workbook, const QString &sheet, int headerRow,
+                                const QHash<int, ColumnRole> *roles, FundSheet *out, QString *error)
 {
     const io::SheetSize size = workbook.sheetSize(sheet);
     if (size.rows < 2 || size.columns < 1) {
@@ -175,15 +201,29 @@ bool FundSheetReader::read(const io::XlsxWorkbook &workbook, const QString &shee
         return false;
     }
 
-    // Строка заголовков: в первых строках листа, больше всего «узнаваемых» названий.
+    // Строка заголовков: задана мастером импорта или ищется в первых строках листа
+    // (больше всего «узнаваемых» названий).
     int headerIndex = -1;
-    int bestScore = 1;
-    for (int i = 0; i < rows.size() && rows.at(i).row <= kHeaderSearchRows; ++i) {
-        const int score = headerScore(rows.at(i).values);
-        if (score > bestScore) {
-            bestScore = score;
-            headerIndex = i;
+    if (headerRow > 0) {
+        for (int i = 0; i < rows.size(); ++i) {
+            if (rows.at(i).row == headerRow) {
+                headerIndex = i;
+                break;
+            }
         }
+    } else {
+        int bestScore = 1;
+        for (int i = 0; i < rows.size() && rows.at(i).row <= kHeaderSearchRows; ++i) {
+            const int score = headerScore(rows.at(i).values);
+            if (score > bestScore) {
+                bestScore = score;
+                headerIndex = i;
+            }
+        }
+    }
+    if (headerIndex < 0 && headerRow > 0) {
+        setError(error, QStringLiteral("На листе «%1» строка %2 пустая, заголовков в ней нет").arg(sheet).arg(headerRow));
+        return false;
     }
     if (headerIndex < 0) {
         setError(error, QStringLiteral("На листе «%1» не найдена строка с заголовками столбцов "
@@ -205,7 +245,8 @@ bool FundSheetReader::read(const io::XlsxWorkbook &workbook, const QString &shee
     result.headerRow = rows.at(headerIndex).row;
     for (int c = 0; c < columnCount; ++c) {
         const QString title = displayText(header.at(c));
-        if (title.isEmpty() && !used[c])
+        const bool mapped = roles && roles->contains(c + 1);
+        if (title.isEmpty() && !used[c] && !mapped)
             continue;
         FundColumn column;
         column.excelColumn = c + 1;
@@ -218,6 +259,10 @@ bool FundSheetReader::read(const io::XlsxWorkbook &workbook, const QString &shee
             // «автор книги и название» → «Автор книги и название»
             column.title[0] = column.title.at(0).toUpper();
         }
+        if (mapped)
+            column.role = roles->value(c + 1);
+        if (title.isEmpty() && column.role != ColumnRole::Mark)
+            column.title = QStringLiteral("Столбец %1").arg(columnLetter(c + 1));
         result.columns.push_back(column);
     }
 
@@ -384,10 +429,15 @@ void FundSheetReader::applyFontColors(FundSheet *sheet, const io::FontColors &co
 
 bool FundSheetReader::readBestSheet(const io::XlsxWorkbook &workbook, FundSheet *out, QString *error)
 {
+    // Файл уже открывали через мастер импорта: читаем так же, как тогда.
+    const ImportLayout layout = ImportLayout::load(workbook);
+    if (layout.isValid() && workbook.sheetNames().contains(layout.sheet))
+        return read(workbook, layout, out, error);
+
     FundSheet best;
     QString firstError;
     for (const QString &sheet : workbook.sheetNames()) {
-        if (workbook.isVeryHidden(sheet) || sheet == archiveSheetName())
+        if (workbook.isVeryHidden(sheet) || sheet == archiveSheetName() || sheet.startsWith(QLatin1Char('_')))
             continue;
         FundSheet candidate;
         QString sheetError;
