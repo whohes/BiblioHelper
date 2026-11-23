@@ -1,0 +1,37 @@
+/* Светлое спокойное оформление, хорошая контрастность. */
+QMainWindow, QWidget {
+    background: #f7f7f5;
+    color: #1f1f1f;
+}
+
+QPushButton {
+    background: #ffffff;
+    border: 1px solid #9a9a9a;
+    border-radius: 6px;
+    padding: 6px 12px;
+}
+QPushButton:hover { background: #eef3fb; border-color: #3b6fb6; }
+QPushButton:pressed { background: #dde7f6; }
+QPushButton:disabled { color: #8a8a8a; border-color: #c8c8c8; background: #f0f0ee; }
+
+QLineEdit, QTextBrowser {
+    background: #ffffff;
+    border: 1px solid #9a9a9a;
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+
+QTabBar::tab {
+    padding: 8px 18px;
+    border: 1px solid #c8c8c8;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    background: #ececea;
+    margin-right: 2px;
+}
+QTabBar::tab:selected { background: #ffffff; font-weight: bold; }
+
+QLabel#fileLabel { font-weight: bold; }
+QLabel#unsavedLabel[unsaved="true"] { color: #8a4b00; font-weight: bold; }
+QLabel#emptyState { color: #555555; }
