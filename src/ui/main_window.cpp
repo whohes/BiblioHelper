@@ -9,6 +9,8 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QKeySequence>
+#include <QCheckBox>
+#include <QColor>
 #include <QLabel>
 #include <QItemSelectionModel>
 #include <QLocale>
@@ -78,6 +80,12 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_tabs, &QTabWidget::currentChanged, this, [this, versionsTab](int index) {
         if (index == versionsTab)
             emit versionsTabShown();
+    });
+    m_logTab = createLogTab();
+    m_tabs->addTab(m_logTab, QStringLiteral("Журнал"));
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this] {
+        if (isLogTabActive())
+            emit logTabShown();
     });
     m_tabs->addTab(createHelpTab(), QStringLiteral("Справка"));
     layout->addWidget(m_tabs, 1);
@@ -380,6 +388,97 @@ void MainWindow::setVersions(const QVector<core::WorkCopies::BackupInfo> &versio
                                  : QStringLiteral("Прошлых версий пока нет: первая появится при «Сохранить»."));
 }
 
+QWidget *MainWindow::createLogTab()
+{
+    auto *page = new QWidget;
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(16, 14, 16, 14);
+    layout->setSpacing(10);
+
+    auto *title = new QLabel(QStringLiteral("Журнал действий"), page);
+    title->setObjectName(QStringLiteral("sectionTitle"));
+    layout->addWidget(title);
+    auto *text = new QLabel(QStringLiteral("Здесь записано, что и когда делалось с фондом: импорт, добавление и "
+                                           "изменение книг, выбытие, отчёты, очистка, экспорт, возврат версий и "
+                                           "ошибки. Новые записи сверху."),
+                            page);
+    text->setWordWrap(true);
+    text->setObjectName(QStringLiteral("emptyState"));
+    layout->addWidget(text);
+
+    m_log = new QTableWidget(0, 4, page);
+    m_log->setHorizontalHeaderLabels({QStringLiteral("Дата и время"), QStringLiteral("Действие"),
+                                      QStringLiteral("Экз."), QStringLiteral("Подробности")});
+    m_log->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_log->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_log->setWordWrap(false);
+    m_log->setTextElideMode(Qt::ElideRight);
+    m_log->verticalHeader()->hide();
+    m_log->verticalHeader()->setDefaultSectionSize(m_log->fontMetrics().height() + 14);
+    m_log->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_log->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    layout->addWidget(m_log, 1);
+    m_logEmpty = new QLabel(page);
+    m_logEmpty->setObjectName(QStringLiteral("emptyState"));
+    layout->addWidget(m_logEmpty);
+
+    auto *row = new QHBoxLayout;
+    m_logCurrentOnly = new QCheckBox(QStringLiteral("Только открытый фонд"), page);
+    m_logCurrentOnly->setChecked(true);
+    connect(m_logCurrentOnly, &QCheckBox::toggled, this, &MainWindow::logScopeChanged);
+    row->addWidget(m_logCurrentOnly);
+    row->addStretch(1);
+    auto *openFolder = createActionButton(QStringLiteral("Открыть папку журнала"),
+                                          QStringLiteral("Показать файл журнала в Проводнике"));
+    openFolder->setIcon(makeIcon(IconKind::Open));
+    connect(openFolder, &QPushButton::clicked, this, &MainWindow::openLogFolderRequested);
+    row->addWidget(openFolder);
+    layout->addLayout(row);
+    setLog({}, {});
+    return page;
+}
+
+bool MainWindow::isLogTabActive() const
+{
+    return m_tabs && m_logTab && m_tabs->currentWidget() == m_logTab;
+}
+
+void MainWindow::setLog(const QVector<core::LogEntry> &entries, const QString &fund)
+{
+    const bool allFunds = fund.isEmpty();
+    m_log->setColumnCount(allFunds ? 5 : 4);
+    QStringList headers = {QStringLiteral("Дата и время"), QStringLiteral("Действие"), QStringLiteral("Экз."),
+                           QStringLiteral("Подробности")};
+    if (allFunds)
+        headers.insert(3, QStringLiteral("Фонд"));
+    m_log->setHorizontalHeaderLabels(headers);
+    m_log->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_log->horizontalHeader()->setSectionResizeMode(headers.size() - 1, QHeaderView::Stretch);
+    m_log->setRowCount(entries.size());
+    const QLocale ru(QLocale::Russian);
+    for (int i = 0; i < entries.size(); ++i) {
+        const core::LogEntry &e = entries.at(i);
+        int c = 0;
+        m_log->setItem(i, c++, new QTableWidgetItem(e.time.toString(QStringLiteral("dd.MM.yyyy  HH:mm"))));
+        auto *action = new QTableWidgetItem(e.actionTitle());
+        if (e.action == QLatin1String("error"))
+            action->setForeground(QColor(0xb4, 0x23, 0x18));
+        m_log->setItem(i, c++, action);
+        auto *count = new QTableWidgetItem(e.count < 0 ? QString() : ru.toString(e.count));
+        count->setTextAlignment(Qt::AlignCenter);
+        m_log->setItem(i, c++, count);
+        if (allFunds)
+            m_log->setItem(i, c++, new QTableWidgetItem(e.fund));
+        auto *details = new QTableWidgetItem(e.details);
+        details->setToolTip(e.details);
+        m_log->setItem(i, c++, details);
+    }
+    m_logEmpty->setVisible(entries.isEmpty());
+    m_logEmpty->setText(allFunds ? QStringLiteral("Журнал пока пуст.")
+                                 : QStringLiteral("Для этого фонда в журнале пока нет записей."));
+    m_logCurrentOnly->setEnabled(!m_workFileName.isEmpty());
+}
+
 QWidget *MainWindow::createHelpTab()
 {
     auto *help = new QTextBrowser;
@@ -413,6 +512,12 @@ QWidget *MainWindow::createHelpTab()
         "<p>Чтобы вернуть прошлую версию, откройте вкладку <b>«Импорт и экспорт»</b>, выберите версию по дате и "
         "нажмите <b>«Вернуть эту версию»</b>. Текущий файл программа сначала тоже сохранит копией, так что "
         "возврат можно отменить, вернув её.</p>"
+        "<h2>Журнал действий</h2>"
+        "<p>На вкладке <b>«Журнал»</b> записано, что и когда делалось: открытие и импорт файла, добавление и "
+        "изменение книг (что было и что стало), выбытие и возврат в фонд, сохранение, отчёты, очистка, экспорт, "
+        "возврат прошлых версий и ошибки. Галочка «Только открытый фонд» показывает записи текущего файла; "
+        "снимите её, чтобы увидеть все. Журнал хранится в файле «Документы\\BiblioHelper\\Журнал\\журнал.jsonl»; "
+        "его можно приложить к сообщению о проблеме.</p>"
         "<h2>Поиск и фильтры</h2>"
         "<p><b>Поиск</b>: начните вводить название, автора или инвентарный номер в строке поиска. "
         "Можно вводить несколько слов: «абгарян яблоки». Большие и маленькие буквы, «е» и «ё» не различаются.</p>"

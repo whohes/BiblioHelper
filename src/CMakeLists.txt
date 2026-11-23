@@ -1,5 +1,7 @@
 # Библиотека с логикой и работой с файлами: её же подключают автотесты.
 add_library(bh_core STATIC
+    core/action_log.h
+    core/action_log.cpp
     core/copy_ids.h
     core/copy_ids.cpp
     core/csv_import.h
