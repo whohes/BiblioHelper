@@ -4,6 +4,9 @@
 #include "io/xlsx_workbook.h"
 
 #include <QColor>
+#include <QSet>
+
+#include <algorithm>
 #include <QFont>
 #include <QLocale>
 #include <QRegularExpression>
@@ -50,6 +53,7 @@ void FundTableModel::setSheet(core::FundSheet sheet)
     }
     m_dirty.clear();
     m_undo.clear();
+    rebuildBooks();
     setModified(false);
     endResetModel();
     emit undoChanged();
@@ -72,6 +76,141 @@ void FundTableModel::rebuildRow(int row)
     for (int c = 0; c < record.values.size(); ++c)
         cells.push_back(makeCell(c, record.values.at(c)));
     m_cells[row] = std::move(cells);
+}
+
+void FundTableModel::rebuildBooks()
+{
+    m_books.clear();
+    for (int r = 0; r < m_sheet.records.size(); ++r) {
+        const QString &book = m_sheet.records.at(r).bookId;
+        if (!book.isEmpty())
+            m_books[book].push_back(r);
+    }
+}
+
+QString FundTableModel::bookIdOf(int row) const
+{
+    return row >= 0 && row < m_sheet.records.size() ? m_sheet.records.at(row).bookId : QString();
+}
+
+QVector<int> FundTableModel::bookRows(const QString &bookId) const
+{
+    return bookId.isEmpty() ? QVector<int>() : m_books.value(bookId);
+}
+
+QVector<int> FundTableModel::withBookmates(const QVector<int> &rows) const
+{
+    QVector<int> result;
+    QSet<int> seen;
+    for (int row : rows) {
+        const QVector<int> mates = bookRows(bookIdOf(row));
+        for (int r : mates.isEmpty() ? QVector<int>{row} : mates) {
+            if (!seen.contains(r)) {
+                seen.insert(r);
+                result.push_back(r);
+            }
+        }
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+int FundTableModel::setBookIds(const QHash<int, QString> &bookIds, const QString &undoText)
+{
+    UndoStep step{UndoStep::Books, {}, undoText};
+    for (auto it = bookIds.cbegin(); it != bookIds.cend(); ++it) {
+        const int row = it.key();
+        if (row < 0 || row >= m_sheet.records.size() || m_sheet.records.at(row).bookId == it.value())
+            continue;
+        step.rows.push_back({row, {}, m_dirty.value(row), m_sheet.records.at(row).bookId});
+        m_sheet.records[row].bookId = it.value();
+        m_dirty[row];  // книга хранится в скрытом листе: записать при сохранении
+    }
+    if (step.rows.isEmpty())
+        return 0;
+    rebuildBooks();
+    for (const RowState &state : qAsConst(step.rows))
+        emit dataChanged(index(state.row, 0), index(state.row, columnCount() - 1));
+    const int count = step.rows.size();
+    pushUndo(std::move(step));
+    setModified(true);
+    return count;
+}
+
+int FundTableModel::mergeBooks(const QVector<QVector<int>> &groups)
+{
+    QHash<int, QString> ids;
+    // Книга, у которой после объединения не останется экземпляров, исчезает сама;
+    // книга, от которой останется один экземпляр, — тоже (он становится отдельной книгой).
+    QHash<QString, int> remaining;
+    for (auto it = m_books.cbegin(); it != m_books.cend(); ++it)
+        remaining.insert(it.key(), it.value().size());
+    int books = 0;
+    for (const QVector<int> &group : groups) {
+        QVector<int> rows;
+        for (int r : group) {
+            if (r >= 0 && r < m_sheet.records.size() && !rows.contains(r))
+                rows.push_back(r);
+        }
+        if (rows.size() < 2)
+            continue;
+        // Если часть экземпляров уже в книге — к ней и присоединяем.
+        QString target;
+        for (int r : qAsConst(rows)) {
+            if (!m_sheet.records.at(r).bookId.isEmpty()) {
+                target = m_sheet.records.at(r).bookId;
+                break;
+            }
+        }
+        if (target.isEmpty())
+            target = core::CopyIds::newBookId();
+        for (int r : qAsConst(rows)) {
+            const QString &old = m_sheet.records.at(r).bookId;
+            if (old == target)
+                continue;
+            if (!old.isEmpty())
+                --remaining[old];
+            ids.insert(r, target);
+        }
+        ++books;
+    }
+    for (auto it = remaining.cbegin(); it != remaining.cend(); ++it) {
+        if (it.value() == 1) {
+            for (int r : m_books.value(it.key())) {
+                if (!ids.contains(r))
+                    ids.insert(r, QString());
+            }
+        }
+    }
+    const QString text = books == 1 ? QStringLiteral("Отменить объединение в книгу")
+                                    : QStringLiteral("Отменить объединение %1 книг").arg(books);
+    return setBookIds(ids, text) > 0 ? books : 0;
+}
+
+int FundTableModel::splitBooks(const QVector<int> &rows)
+{
+    QHash<int, QString> ids;
+    QHash<QString, int> remaining;
+    for (int r : rows) {
+        const QString book = bookIdOf(r);
+        if (book.isEmpty() || ids.contains(r))
+            continue;
+        ids.insert(r, QString());
+        if (!remaining.contains(book))
+            remaining.insert(book, m_books.value(book).size());
+        --remaining[book];
+    }
+    const int split = ids.size();
+    // Последний оставшийся экземпляр книги — тоже отдельная книга.
+    for (auto it = remaining.cbegin(); it != remaining.cend(); ++it) {
+        if (it.value() == 1) {
+            for (int r : m_books.value(it.key()))
+                ids.insert(r, QString());
+        }
+    }
+    const QString text = split == 1 ? QStringLiteral("Отменить разделение «%1»").arg(titleOf(ids.cbegin().key()))
+                                    : QStringLiteral("Отменить разделение %1 экз.").arg(split);
+    return split > 0 && setBookIds(ids, text) > 0 ? split : 0;
 }
 
 void FundTableModel::setModified(bool modified)
@@ -251,6 +390,18 @@ void FundTableModel::undo()
         m_cells.remove(row);
         m_dirty.remove(row);
         endRemoveRows();
+        rebuildBooks();
+    } else if (step.kind == UndoStep::Books) {
+        for (const RowState &state : step.rows) {
+            m_sheet.records[state.row].bookId = state.oldBookId;
+            if (state.oldDirty.isEmpty())
+                m_dirty.remove(state.row);
+            else
+                m_dirty[state.row] = state.oldDirty;
+        }
+        rebuildBooks();
+        for (const RowState &state : step.rows)
+            emit dataChanged(index(state.row, 0), index(state.row, columnCount() - 1));
     } else {
         for (const RowState &state : step.rows) {
             m_sheet.records[state.row].values = state.oldValues;
@@ -398,6 +549,8 @@ QVariant FundTableModel::data(const QModelIndex &index, int role) const
         return m_sheet.records.at(index.row()).id;
     case WithdrawnRole:
         return m_sheet.isWithdrawn(index.row());
+    case BookIdRole:
+        return m_sheet.records.at(index.row()).bookId;
     case Qt::FontRole:
         if (m_dirty.value(index.row()).contains(index.column()) || m_sheet.records.at(index.row()).excelRow <= 0) {
             QFont font;

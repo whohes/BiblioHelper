@@ -80,6 +80,11 @@ void FundTablePage::addButton(QPushButton *button)
     m_buttons->insertWidget(m_buttons->count() - 1, button);
 }
 
+void FundTablePage::addTrailingWidget(QWidget *widget)
+{
+    m_buttons->addWidget(widget);
+}
+
 void FundTablePage::setMessage(const QString &text)
 {
     // Сообщение после открытия файла (например, «список книг не найден») —

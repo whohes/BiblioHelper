@@ -93,6 +93,31 @@ public:
     };
     Totals totals(int priceColumn, int quantityColumn) const;
 
+    // ---- Книги из нескольких экземпляров (вкладка «Книги») ----
+    // Включено: экземпляры одной книги идут подряд, свёрнутая книга показана
+    // одной строкой «▸ Название (3 экз.)», раскрытая — всеми экземплярами.
+    void setGroupBooks(bool group);
+    bool groupBooks() const { return m_group; }
+    void setExpandAll(bool expand);
+    bool expandAll() const { return m_expandAll; }
+    // Строка таблицы — заголовок книги из нескольких показанных экземпляров.
+    bool isBookRow(const QModelIndex &proxyIndex) const;
+    bool isBookExpanded(const QModelIndex &proxyIndex) const;
+    void toggleBook(const QModelIndex &proxyIndex);
+    // Раскрыть книги этих экземпляров (строки исходной модели).
+    void expandBooks(const QVector<int> &sourceRows);
+    // Строка исходной модели — свёрнутая книга, за которой скрыты другие экземпляры.
+    bool isCollapsedBook(int sourceRow) const;
+    // Показанные экземпляры этой строки: вся свёрнутая книга или сама строка.
+    QVector<int> shownCopies(int sourceRow) const;
+    // Все экземпляры, прошедшие поиск и фильтры, в порядке на экране
+    // (включая скрытые в свёрнутых книгах).
+    QVector<int> shownSourceRows() const;
+
+    void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;
+    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
+    void setSourceModel(QAbstractItemModel *model) override;
+
 signals:
     void filtersChanged();
 
@@ -102,6 +127,19 @@ protected:
 
 private:
     bool acceptsRow(int sourceRow, int ignoredColumn) const;
+    void refilter();
+    void sourceChanged();
+    // Экземпляры книги строки, прошедшие фильтры (по порядку файла); пусто — строка не в книге.
+    const QVector<int> &acceptedBookRows(int sourceRow) const;
+    bool isExpandedBook(const QString &bookId) const { return m_expandAll || m_expanded.contains(bookId); }
+    bool valueLess(const QModelIndex &left, const QModelIndex &right) const;
+
+    bool m_group = false;
+    bool m_expandAll = false;
+    bool m_fileOrder = true;
+    bool m_refreshPending = false;
+    QSet<QString> m_expanded;
+    mutable QHash<QString, QVector<int>> m_bookCache;
 
     QString m_searchText;
     QStringList m_searchWords;

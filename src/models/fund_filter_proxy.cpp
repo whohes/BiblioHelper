@@ -3,7 +3,9 @@
 #include "core/fund_sheet.h"
 #include "fund_table_model.h"
 
+#include <QColor>
 #include <QLocale>
+#include <QTimer>
 
 #include <algorithm>
 
@@ -97,7 +99,7 @@ void FundFilterProxy::setStatusFilter(StatusFilter filter)
     if (filter == m_status)
         return;
     m_status = filter;
-    invalidateFilter();
+    refilter();
     emit filtersChanged();
 }
 
@@ -107,7 +109,7 @@ void FundFilterProxy::setSearchText(const QString &text)
         return;
     m_searchText = text;
     m_searchWords = core::normalizeForSearch(text).split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    invalidateFilter();
+    refilter();
     emit filtersChanged();
 }
 
@@ -115,7 +117,7 @@ void FundFilterProxy::setColumnCondition(int column, const ColumnCondition &cond
 {
     m_columnFilters.remove(column);
     m_conditions.insert(column, condition);
-    invalidateFilter();
+    refilter();
     emit filtersChanged();
 }
 
@@ -123,7 +125,7 @@ void FundFilterProxy::setColumnFilter(int column, const QSet<QString> &allowed)
 {
     m_conditions.remove(column);
     m_columnFilters.insert(column, allowed);
-    invalidateFilter();
+    refilter();
     emit filtersChanged();
 }
 
@@ -131,7 +133,7 @@ void FundFilterProxy::clearColumnFilter(int column)
 {
     if (m_columnFilters.remove(column) + m_conditions.remove(column) == 0)
         return;
-    invalidateFilter();
+    refilter();
     emit filtersChanged();
 }
 
@@ -141,13 +143,220 @@ void FundFilterProxy::clearAllFilters()
     m_conditions.clear();
     m_searchText.clear();
     m_searchWords.clear();
-    invalidateFilter();
+    refilter();
     emit filtersChanged();
 }
 
 bool FundFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex &) const
 {
-    return acceptsRow(sourceRow, -1);
+    if (!acceptsRow(sourceRow, -1))
+        return false;
+    if (!m_group)
+        return true;
+    const QVector<int> &book = acceptedBookRows(sourceRow);
+    if (book.isEmpty())
+        return true;
+    const QString id = sourceModel()->index(sourceRow, 0).data(FundTableModel::BookIdRole).toString();
+    return isExpandedBook(id) || book.first() == sourceRow;
+}
+
+void FundFilterProxy::refilter()
+{
+    m_bookCache.clear();
+    if (m_group)
+        invalidate();  // первый экземпляр книги мог смениться — место книги в сортировке тоже
+    else
+        invalidateFilter();
+}
+
+void FundFilterProxy::setSourceModel(QAbstractItemModel *model)
+{
+    if (sourceModel())
+        disconnect(sourceModel(), nullptr, this, nullptr);
+    // Подключаемся раньше базового класса: кэш книг сбрасывается до того,
+    // как прокси перефильтрует изменённые строки.
+    if (model) {
+        connect(model, &QAbstractItemModel::dataChanged, this, &FundFilterProxy::sourceChanged);
+        connect(model, &QAbstractItemModel::rowsInserted, this, &FundFilterProxy::sourceChanged);
+        connect(model, &QAbstractItemModel::rowsRemoved, this, &FundFilterProxy::sourceChanged);
+        connect(model, &QAbstractItemModel::modelReset, this, &FundFilterProxy::sourceChanged);
+        connect(model, &QAbstractItemModel::layoutChanged, this, &FundFilterProxy::sourceChanged);
+    }
+    QSortFilterProxyModel::setSourceModel(model);
+}
+
+void FundFilterProxy::sourceChanged()
+{
+    m_bookCache.clear();
+    if (!m_group || m_refreshPending)
+        return;
+    // Изменение одного экземпляра может поменять показ всей книги:
+    // после всех изменений пересчитываем таблицу один раз.
+    m_refreshPending = true;
+    QTimer::singleShot(0, this, [this] {
+        m_refreshPending = false;
+        if (m_group)
+            refilter();
+    });
+}
+
+const QVector<int> &FundFilterProxy::acceptedBookRows(int sourceRow) const
+{
+    static const QVector<int> none;
+    const auto *model = qobject_cast<const FundTableModel *>(sourceModel());
+    if (!model)
+        return none;
+    const QString id = model->bookIdOf(sourceRow);
+    if (id.isEmpty())
+        return none;
+    auto it = m_bookCache.find(id);
+    if (it == m_bookCache.end()) {
+        QVector<int> accepted;
+        for (int r : model->bookRows(id)) {
+            if (acceptsRow(r, -1))
+                accepted.push_back(r);
+        }
+        it = m_bookCache.insert(id, accepted);
+    }
+    return it.value().size() > 1 ? it.value() : none;
+}
+
+void FundFilterProxy::setGroupBooks(bool group)
+{
+    if (m_group == group)
+        return;
+    m_group = group;
+    refilter();
+}
+
+void FundFilterProxy::setExpandAll(bool expand)
+{
+    if (m_expandAll == expand)
+        return;
+    m_expandAll = expand;
+    if (!expand)
+        m_expanded.clear();
+    invalidateFilter();
+}
+
+bool FundFilterProxy::isBookRow(const QModelIndex &proxyIndex) const
+{
+    if (!m_group || !proxyIndex.isValid())
+        return false;
+    const int source = mapToSource(proxyIndex).row();
+    const QVector<int> &book = acceptedBookRows(source);
+    return !book.isEmpty() && book.first() == source;
+}
+
+bool FundFilterProxy::isBookExpanded(const QModelIndex &proxyIndex) const
+{
+    if (!isBookRow(proxyIndex))
+        return false;
+    return isExpandedBook(mapToSource(proxyIndex).data(FundTableModel::BookIdRole).toString());
+}
+
+void FundFilterProxy::toggleBook(const QModelIndex &proxyIndex)
+{
+    if (!isBookRow(proxyIndex))
+        return;
+    const QString id = mapToSource(proxyIndex).data(FundTableModel::BookIdRole).toString();
+    if (isExpandedBook(id)) {
+        if (m_expandAll)
+            return;  // «Раскрыть все» включено
+        m_expanded.remove(id);
+    } else {
+        m_expanded.insert(id);
+    }
+    invalidateFilter();
+}
+
+void FundFilterProxy::expandBooks(const QVector<int> &sourceRows)
+{
+    const auto *model = qobject_cast<const FundTableModel *>(sourceModel());
+    if (!model)
+        return;
+    bool changed = false;
+    for (int r : sourceRows) {
+        const QString id = model->bookIdOf(r);
+        if (!id.isEmpty() && !m_expanded.contains(id)) {
+            m_expanded.insert(id);
+            changed = true;
+        }
+    }
+    if (changed && m_group)
+        invalidateFilter();
+}
+
+bool FundFilterProxy::isCollapsedBook(int sourceRow) const
+{
+    if (!m_group)
+        return false;
+    const QVector<int> &book = acceptedBookRows(sourceRow);
+    if (book.isEmpty() || book.first() != sourceRow)
+        return false;
+    return !isExpandedBook(sourceModel()->index(sourceRow, 0).data(FundTableModel::BookIdRole).toString());
+}
+
+QVector<int> FundFilterProxy::shownCopies(int sourceRow) const
+{
+    if (isCollapsedBook(sourceRow))
+        return acceptedBookRows(sourceRow);
+    return {sourceRow};
+}
+
+QVector<int> FundFilterProxy::shownSourceRows() const
+{
+    QVector<int> rows;
+    rows.reserve(rowCount());
+    for (int r = 0; r < rowCount(); ++r)
+        rows += shownCopies(mapToSource(index(r, 0)).row());
+    return rows;
+}
+
+void FundFilterProxy::sort(int column, Qt::SortOrder order)
+{
+    m_bookCache.clear();
+    m_fileOrder = column < 0;
+    // Без сортировки экземпляры книги разбросаны по файлу: в режиме книг
+    // «порядок как в файле» — тоже сортировка, по первому экземпляру книги.
+    if (m_group && column < 0)
+        QSortFilterProxyModel::sort(0, Qt::AscendingOrder);
+    else
+        QSortFilterProxyModel::sort(column, order);
+}
+
+QVariant FundFilterProxy::data(const QModelIndex &index, int role) const
+{
+    if (!m_group || !index.isValid()
+        || (role != Qt::DisplayRole && role != Qt::ToolTipRole && role != Qt::BackgroundRole))
+        return QSortFilterProxyModel::data(index, role);
+    const auto *model = qobject_cast<const FundTableModel *>(sourceModel());
+    if (!model)
+        return QSortFilterProxyModel::data(index, role);
+    const int source = mapToSource(index).row();
+    const QVector<int> &book = acceptedBookRows(source);
+    if (book.isEmpty())
+        return QSortFilterProxyModel::data(index, role);
+    const bool head = book.first() == source;
+    const bool expanded = isExpandedBook(model->bookIdOf(source));
+    if (role == Qt::BackgroundRole)
+        return head ? QVariant() : QVariant(QColor(0xf3, 0xf6, 0xfa));
+    const int author = model->sheet().columnIndex(core::ColumnRole::AuthorTitle);
+    if (index.column() != author)
+        return QSortFilterProxyModel::data(index, role);
+    const QString text = QSortFilterProxyModel::data(index, Qt::DisplayRole).toString();
+    if (role == Qt::ToolTipRole) {
+        return head ? QStringLiteral("%1\nКнига из %2 экз. Щёлкните по стрелке слева, чтобы %3.")
+                          .arg(text)
+                          .arg(book.size())
+                          .arg(expanded ? QStringLiteral("свернуть") : QStringLiteral("показать все экземпляры"))
+                    : text;
+    }
+    if (!head)
+        return QStringLiteral("        %1").arg(text);
+    if (expanded)
+        return QStringLiteral("▾  %1").arg(text);
+    return QStringLiteral("▸  %1   (%2 экз.)").arg(text).arg(book.size());
 }
 
 bool FundFilterProxy::acceptsRow(int sourceRow, int ignoredColumn) const
@@ -199,19 +408,21 @@ bool FundFilterProxy::acceptsRow(int sourceRow, int ignoredColumn) const
 FundFilterProxy::Totals FundFilterProxy::totals(int priceColumn, int quantityColumn) const
 {
     Totals result;
-    result.rows = rowCount();
-    if (priceColumn < 0)
+    const QVector<int> rows = shownSourceRows();
+    result.rows = rows.size();
+    if (priceColumn < 0 || !sourceModel())
         return result;
-    for (int r = 0; r < result.rows; ++r) {
+    const QAbstractItemModel *model = sourceModel();
+    for (int r : rows) {
         // SortRole — число для числовых ячеек и цен вида «44р10к», иначе текст.
-        const QVariant price = index(r, priceColumn).data(FundTableModel::SortRole);
+        const QVariant price = model->index(r, priceColumn).data(FundTableModel::SortRole);
         if (price.type() != QVariant::Double) {
             ++result.withoutPrice;
             continue;
         }
         double quantity = 1;
         if (quantityColumn >= 0) {
-            const QVariant q = index(r, quantityColumn).data(FundTableModel::SortRole);
+            const QVariant q = model->index(r, quantityColumn).data(FundTableModel::SortRole);
             if (q.type() == QVariant::Double && q.toDouble() > 0)
                 quantity = q.toDouble();
         }
@@ -268,6 +479,32 @@ QVector<QPair<QString, int>> FundFilterProxy::columnValues(int column) const
 }
 
 bool FundFilterProxy::lessThan(const QModelIndex &left, const QModelIndex &right) const
+{
+    if (m_group) {
+        const QVector<int> &lb = acceptedBookRows(left.row());
+        const QVector<int> &rb = acceptedBookRows(right.row());
+        const int lrep = lb.isEmpty() ? left.row() : lb.first();
+        const int rrep = rb.isEmpty() ? right.row() : rb.first();
+        if (lrep != rrep) {
+            // Книга стоит на месте своего первого экземпляра.
+            if (m_fileOrder)
+                return lrep < rrep;
+            const QModelIndex l = left.sibling(lrep, left.column());
+            const QModelIndex r = right.sibling(rrep, right.column());
+            if (valueLess(l, r))
+                return true;
+            if (valueLess(r, l))
+                return false;
+            return lrep < rrep;
+        }
+        // Экземпляры одной книги — всегда по порядку файла, первый сверху.
+        const bool before = left.row() < right.row();
+        return sortOrder() == Qt::DescendingOrder ? !before : before;
+    }
+    return valueLess(left, right);
+}
+
+bool FundFilterProxy::valueLess(const QModelIndex &left, const QModelIndex &right) const
 {
     const QVariant l = left.data(FundTableModel::SortRole);
     const QVariant r = right.data(FundTableModel::SortRole);

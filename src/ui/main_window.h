@@ -71,6 +71,11 @@ signals:
     void logTabShown();
     void logScopeChanged(bool currentFundOnly);
     void openLogFolderRequested();
+    // Книги из нескольких экземпляров (вкладка «Книги»).
+    void findBooksRequested();
+    void mergeBooksRequested();
+    void splitBooksRequested();
+    void expandAllBooksToggled(bool expand);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -95,6 +100,10 @@ private:
     FundTablePage *m_withdrawnPage = nullptr;
     QPushButton *m_restore = nullptr;
     QPushButton *m_report = nullptr;
+    QPushButton *m_findBooks = nullptr;
+    QPushButton *m_mergeBooks = nullptr;
+    QPushButton *m_splitBooks = nullptr;
+    QCheckBox *m_expandAll = nullptr;
 
     QPushButton *m_open = nullptr;
     QPushButton *m_save = nullptr;

@@ -19,6 +19,11 @@ QString CopyIds::newId()
     return QStringLiteral("c-") + QUuid::createUuid().toString(QUuid::Id128).left(8);
 }
 
+QString CopyIds::newBookId()
+{
+    return QStringLiteral("b-") + QUuid::createUuid().toString(QUuid::Id128).left(8);
+}
+
 QString CopyIds::fingerprint(const FundSheet &sheet, const FundRecord &record)
 {
     QByteArray data;
@@ -37,7 +42,7 @@ QVector<CopyIds::Entry> CopyIds::load(const io::XlsxWorkbook &workbook)
     if (!workbook.sheetNames().contains(sheetName()))
         return entries;
     const io::SheetSize size = workbook.sheetSize(sheetName());
-    const auto rows = workbook.readRows(sheetName(), 2, std::max(size.rows, 2), 7);
+    const auto rows = workbook.readRows(sheetName(), 2, std::max(size.rows, 2), 8);
     entries.reserve(rows.size());
     for (const auto &row : rows) {
         Entry e;
@@ -48,6 +53,7 @@ QVector<CopyIds::Entry> CopyIds::load(const io::XlsxWorkbook &workbook)
         e.withdrawnOn = row.values.value(4).toString();
         e.reason = row.values.value(5).toString();
         e.note = row.values.value(6).toString();
+        e.bookId = row.values.value(7).toString();
         if (!e.copyId.isEmpty())
             entries.push_back(e);
     }
@@ -62,7 +68,7 @@ bool CopyIds::save(io::XlsxWorkbook &workbook, const FundSheet &sheet, QString *
     rows.reserve(sheet.records.size() + 1);
     rows.push_back({QStringLiteral("copy_id"), QStringLiteral("sheet"), QStringLiteral("row"),
                     QStringLiteral("fingerprint"), QStringLiteral("withdrawn_on"), QStringLiteral("reason"),
-                    QStringLiteral("note")});
+                    QStringLiteral("note"), QStringLiteral("book_id")});
     const int dateCol = sheet.columnIndex(ColumnRole::WithdrawDate);
     const int reasonCol = sheet.columnIndex(ColumnRole::WithdrawReason);
     const int noteCol = sheet.columnIndex(ColumnRole::WithdrawNote);
@@ -76,6 +82,11 @@ bool CopyIds::save(io::XlsxWorkbook &workbook, const FundSheet &sheet, QString *
         if (sheet.isWithdrawn(record)) {
             row << record.values.at(dateCol).toDate().toString(Qt::ISODate) << text(record, reasonCol)
                 << text(record, noteCol);
+        }
+        if (!record.bookId.isEmpty()) {
+            while (row.size() < 7)
+                row << QString();
+            row << record.bookId;
         }
         rows.push_back(row);
     }
@@ -146,30 +157,38 @@ int CopyIds::assign(FundSheet *sheet, const QVector<Entry> &entries)
         }
     }
 
-    // Сведения о выбытии — по найденному ID.
+    // Сведения о выбытии и книга — по найденному ID.
     const int dateCol = sheet->columnIndex(ColumnRole::WithdrawDate);
     const int reasonCol = sheet->columnIndex(ColumnRole::WithdrawReason);
     const int noteCol = sheet->columnIndex(ColumnRole::WithdrawNote);
-    if (dateCol >= 0) {
-        QHash<QString, int> byId;
-        for (int i = 0; i < entries.size(); ++i) {
-            if (used[i])
-                byId.insert(entries.at(i).copyId, i);
-        }
-        for (FundRecord &record : sheet->records) {
-            const auto it = byId.constFind(record.id);
-            if (it == byId.constEnd())
-                continue;
-            const Entry &e = entries.at(*it);
-            const QDate date = QDate::fromString(e.withdrawnOn, Qt::ISODate);
-            if (!date.isValid())
-                continue;
-            record.values[dateCol] = date;
-            if (reasonCol >= 0)
-                record.values[reasonCol] = e.reason.isEmpty() ? QVariant() : QVariant(e.reason);
-            if (noteCol >= 0)
-                record.values[noteCol] = e.note.isEmpty() ? QVariant() : QVariant(e.note);
-        }
+    QHash<QString, int> byId;
+    for (int i = 0; i < entries.size(); ++i) {
+        if (used[i])
+            byId.insert(entries.at(i).copyId, i);
+    }
+    QHash<QString, int> bookSizes;
+    for (FundRecord &record : sheet->records) {
+        record.bookId.clear();
+        const auto it = byId.constFind(record.id);
+        if (it == byId.constEnd())
+            continue;
+        const Entry &e = entries.at(*it);
+        record.bookId = e.bookId;
+        if (!record.bookId.isEmpty())
+            ++bookSizes[record.bookId];
+        const QDate date = QDate::fromString(e.withdrawnOn, Qt::ISODate);
+        if (dateCol < 0 || !date.isValid())
+            continue;
+        record.values[dateCol] = date;
+        if (reasonCol >= 0)
+            record.values[reasonCol] = e.reason.isEmpty() ? QVariant() : QVariant(e.reason);
+        if (noteCol >= 0)
+            record.values[noteCol] = e.note.isEmpty() ? QVariant() : QVariant(e.note);
+    }
+    // Книга, от которой остался один экземпляр (остальные удалили в Excel), — уже не группа.
+    for (FundRecord &record : sheet->records) {
+        if (!record.bookId.isEmpty() && bookSizes.value(record.bookId) < 2)
+            record.bookId.clear();
     }
     return created;
 }

@@ -31,6 +31,8 @@ QString ActionLog::actionTitle(const QString &action)
         {QStringLiteral("edit"), QStringLiteral("Изменение")},
         {QStringLiteral("withdraw"), QStringLiteral("Выбытие")},
         {QStringLiteral("return"), QStringLiteral("Возврат в фонд")},
+        {QStringLiteral("merge"), QStringLiteral("Объединение в книгу")},
+        {QStringLiteral("split"), QStringLiteral("Разделение книги")},
         {QStringLiteral("undo"), QStringLiteral("Отмена действия")},
         {QStringLiteral("save"), QStringLiteral("Сохранение")},
         {QStringLiteral("report"), QStringLiteral("Отчёт по выбывшим")},
