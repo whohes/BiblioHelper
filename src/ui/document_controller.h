@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/import_layout.h"
 #include "core/work_copy.h"
 #include "io/xlsx_workbook.h"
 #include "models/fund_filter_proxy.h"
@@ -40,6 +41,15 @@ private slots:
     void editSelected();
     void editRow(int modelRow);
     void finishImport(const QSet<QString> &withdrawnMarks);
+    void exportData();
+    void restoreVersion(const QString &backupPath);
+    void refreshVersions();
+    void openBackupFolder();
+    // Сколько действующих и выбывших в файле на диске (для резервных копий).
+    void rememberDiskCounts();
+    // Читает лист открытой рабочей копии (по настройкам мастера или сам ищет
+    // лист с книгами) и показывает его в таблицах.
+    void showWorkbook(const core::ImportLayout &layout, const QString &displayName);
     void undo();
     void withdrawSelected();
     void restoreSelected();
@@ -64,6 +74,8 @@ private:
     io::XlsxWorkbook m_workbook;
     QString m_originalPath;
     QString m_workPath;
+    int m_diskBooks = -1;
+    int m_diskWithdrawn = -1;
 
     models::FundTableModel *m_model;
     models::FundFilterProxy *m_proxy;           // «Книги»: действующие

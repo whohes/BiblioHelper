@@ -10,6 +10,10 @@
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
+#include <QItemSelectionModel>
+#include <QLocale>
+#include <QTableWidget>
+#include <QHeaderView>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
@@ -70,6 +74,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_tabs->addTab(createBooksTab(), QStringLiteral("Книги"));
     m_tabs->addTab(createWithdrawnTab(), QStringLiteral("Выбывшие"));
     m_tabs->addTab(createImportExportTab(), QStringLiteral("Импорт и экспорт"));
+    const int versionsTab = m_tabs->count() - 1;
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this, versionsTab](int index) {
+        if (index == versionsTab)
+            emit versionsTabShown();
+    });
     m_tabs->addTab(createHelpTab(), QStringLiteral("Справка"));
     layout->addWidget(m_tabs, 1);
     connect(m_tabs, &QTabWidget::currentChanged, this, [this] {
@@ -255,8 +264,120 @@ void MainWindow::setUndoText(const QString &text)
 
 QWidget *MainWindow::createImportExportTab()
 {
-    return createEmptyState(QStringLiteral(
-        "Здесь будут импорт из нескольких файлов, восстановление прошлых версий и экспорт."));
+    auto *page = new QWidget;
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(16, 14, 16, 14);
+    layout->setSpacing(10);
+
+    // Экспорт.
+    auto *exportTitle = new QLabel(QStringLiteral("Экспорт"), page);
+    exportTitle->setObjectName(QStringLiteral("sectionTitle"));
+    layout->addWidget(exportTitle);
+    auto *exportRow = new QHBoxLayout;
+    auto *exportText = new QLabel(QStringLiteral("Выгрузить весь фонд, найденные книги или выбывшие в отдельный файл "
+                                                 "Excel или CSV, с выбором столбцов."),
+                                  page);
+    exportText->setWordWrap(true);
+    exportText->setObjectName(QStringLiteral("emptyState"));
+    exportRow->addWidget(exportText, 1);
+    m_exportTabButton = createActionButton(QStringLiteral("Экспорт…"), QStringLiteral("Выгрузить в Excel или CSV"));
+    m_exportTabButton->setIcon(makeIcon(IconKind::Export));
+    connect(m_exportTabButton, &QPushButton::clicked, this, &MainWindow::exportRequested);
+    exportRow->addWidget(m_exportTabButton);
+    layout->addLayout(exportRow);
+    layout->addSpacing(8);
+
+    // Прошлые версии.
+    auto *versionsTitle = new QLabel(QStringLiteral("Прошлые версии"), page);
+    versionsTitle->setObjectName(QStringLiteral("sectionTitle"));
+    layout->addWidget(versionsTitle);
+    auto *versionsText = new QLabel(
+        QStringLiteral("Перед каждым «Сохранить» программа откладывает копию рабочего файла. Хранятся 20 последних "
+                       "таких копий; копии перед очисткой и восстановлением не удаляются. Выберите версию и нажмите "
+                       "«Вернуть эту версию»: текущий файл тоже сохранится копией, его можно будет вернуть."),
+        page);
+    versionsText->setWordWrap(true);
+    versionsText->setObjectName(QStringLiteral("emptyState"));
+    layout->addWidget(versionsText);
+
+    m_versions = new QTableWidget(0, 5, page);
+    m_versions->setHorizontalHeaderLabels({QStringLiteral("Дата и время"), QStringLiteral("Когда сделана"),
+                                           QStringLiteral("Книг в фонде"), QStringLiteral("Выбывших"),
+                                           QStringLiteral("Размер")});
+    m_versions->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_versions->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_versions->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_versions->verticalHeader()->hide();
+    m_versions->verticalHeader()->setDefaultSectionSize(m_versions->fontMetrics().height() + 14);
+    m_versions->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_versions->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    layout->addWidget(m_versions, 1);
+    m_versionsEmpty = new QLabel(page);
+    m_versionsEmpty->setObjectName(QStringLiteral("emptyState"));
+    layout->addWidget(m_versionsEmpty);
+
+    auto *buttons = new QHBoxLayout;
+    m_restoreVersion = createActionButton(QStringLiteral("Вернуть эту версию"),
+                                          QStringLiteral("Заменить рабочий файл выбранной версией"));
+    m_restoreVersion->setIcon(makeIcon(IconKind::Restore));
+    m_openBackups = createActionButton(QStringLiteral("Открыть папку с копиями"),
+                                       QStringLiteral("Показать резервные копии в Проводнике"));
+    m_openBackups->setIcon(makeIcon(IconKind::Open));
+    buttons->addWidget(m_restoreVersion);
+    buttons->addWidget(m_openBackups);
+    buttons->addStretch(1);
+    layout->addLayout(buttons);
+
+    auto selectedPath = [this]() -> QString {
+        const auto rows = m_versions->selectionModel()->selectedRows();
+        if (rows.isEmpty() || rows.first().row() >= m_versionList.size())
+            return {};
+        return m_versionList.at(rows.first().row()).path;
+    };
+    connect(m_versions->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            [this, selectedPath] { m_restoreVersion->setEnabled(!selectedPath().isEmpty()); });
+    connect(m_restoreVersion, &QPushButton::clicked, this, [this, selectedPath] {
+        const QString path = selectedPath();
+        if (!path.isEmpty())
+            emit restoreVersionRequested(path);
+    });
+    connect(m_versions, &QTableWidget::cellDoubleClicked, this, [this, selectedPath](int, int) {
+        const QString path = selectedPath();
+        if (!path.isEmpty())
+            emit restoreVersionRequested(path);
+    });
+    connect(m_openBackups, &QPushButton::clicked, this, &MainWindow::openBackupFolderRequested);
+    setVersions({});
+    return page;
+}
+
+void MainWindow::setVersions(const QVector<core::WorkCopies::BackupInfo> &versions)
+{
+    m_versionList = versions;
+    m_versions->setRowCount(versions.size());
+    const QLocale ru(QLocale::Russian);
+    auto count = [&ru](int n) { return n < 0 ? QStringLiteral("—") : ru.toString(n); };
+    for (int i = 0; i < versions.size(); ++i) {
+        const auto &v = versions.at(i);
+        m_versions->setItem(i, 0, new QTableWidgetItem(v.createdAt.toString(QStringLiteral("dd.MM.yyyy  HH:mm"))));
+        m_versions->setItem(i, 1, new QTableWidgetItem(v.reason));
+        auto *books = new QTableWidgetItem(count(v.books));
+        books->setTextAlignment(Qt::AlignCenter);
+        m_versions->setItem(i, 2, books);
+        auto *withdrawn = new QTableWidgetItem(count(v.withdrawn));
+        withdrawn->setTextAlignment(Qt::AlignCenter);
+        m_versions->setItem(i, 3, withdrawn);
+        auto *size = new QTableWidgetItem(QStringLiteral("%1 КБ").arg(ru.toString((v.size + 1023) / 1024)));
+        size->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_versions->setItem(i, 4, size);
+    }
+    m_versions->clearSelection();
+    m_restoreVersion->setEnabled(false);
+    m_openBackups->setEnabled(!m_workFileName.isEmpty());
+    m_versionsEmpty->setVisible(versions.isEmpty());
+    m_versionsEmpty->setText(m_workFileName.isEmpty()
+                                 ? QStringLiteral("Откройте файл фонда, чтобы увидеть его прошлые версии.")
+                                 : QStringLiteral("Прошлых версий пока нет: первая появится при «Сохранить»."));
 }
 
 QWidget *MainWindow::createHelpTab()
@@ -282,6 +403,16 @@ QWidget *MainWindow::createHelpTab()
         "<p>Кроме Excel (.xlsx) можно открыть <b>.xls</b> (Excel 97–2003) и <b>.csv</b> (кодировка UTF-8 или "
         "Windows-1251, разделитель «;», «,» или табуляция). Они переводятся в рабочую копию .xlsx; "
         "оформление из .xls не переносится, только значения.</p>"
+        "<h2>Экспорт</h2>"
+        "<p>Кнопка <b>«Экспорт»</b> сохраняет в отдельный файл весь фонд, найденные сейчас книги (с учётом поиска "
+        "и фильтров) или выбывшие. Можно выбрать столбцы и формат: Excel (с итогом, фильтрами и закреплённой "
+        "шапкой) или CSV для других программ. Рабочая копия фонда при этом не меняется.</p>"
+        "<h2>Прошлые версии</h2>"
+        "<p>Перед каждым «Сохранить» программа откладывает копию рабочего файла в «Документы\\BiblioHelper\\"
+        "Резервные копии». Хранятся 20 последних таких копий; копии перед очисткой и восстановлением не удаляются.</p>"
+        "<p>Чтобы вернуть прошлую версию, откройте вкладку <b>«Импорт и экспорт»</b>, выберите версию по дате и "
+        "нажмите <b>«Вернуть эту версию»</b>. Текущий файл программа сначала тоже сохранит копией, так что "
+        "возврат можно отменить, вернув её.</p>"
         "<h2>Поиск и фильтры</h2>"
         "<p><b>Поиск</b>: начните вводить название, автора или инвентарный номер в строке поиска. "
         "Можно вводить несколько слов: «абгарян яблоки». Большие и маленькие буквы, «е» и «ё» не различаются.</p>"
@@ -356,7 +487,7 @@ void MainWindow::setPrimary(QPushButton *button, bool primary)
 void MainWindow::updateDocumentActions()
 {
     const bool hasDocument = !m_workFileName.isEmpty();
-    for (auto *button : {m_saveAs, m_addBook, m_edit, m_withdraw, m_export, m_resetFilters, m_restore, m_report})
+    for (auto *button : {m_saveAs, m_addBook, m_edit, m_withdraw, m_export, m_exportTabButton, m_resetFilters, m_restore, m_report})
         button->setEnabled(hasDocument);
     m_save->setEnabled(hasDocument && m_unsaved);
     m_search->setEnabled(hasDocument);

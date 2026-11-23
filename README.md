@@ -41,6 +41,12 @@ ctest --test-dir build --output-on-failure
   `cmake/Dependencies.cmake`. Перевод строк в UTF-8 заменён на свой
   (`cmake/patches/libxls_portable.cmake`): на Windows 7 нет UTF-8 локали,
   а iconv в MinGW нет. XLS и CSV сразу переводятся в рабочую копию `.xlsx`.
+- Экспорт (`src/core/fund_export.*`): XLSX через QXlsx + разметка печати,
+  автофильтр и закрепление через OpenXLSX; CSV в UTF-8 с BOM и «;».
+- Резервные копии: перед каждым «Сохранить» (`WorkCopies::backup`), хранятся
+  20 последних автоматических; сведения о числе книг — в
+  «Сведения о копиях.json» рядом с копиями. Вкладка «Импорт и экспорт»
+  показывает их и возвращает выбранную версию.
 - Мастер импорта (`src/ui/import_wizard.*`) сохраняет лист, строку
   заголовков и назначение столбцов в скрытом листе `_BiblioHelperImport`
   (`src/core/import_layout.*`); при следующем открытии файл читается по ним.

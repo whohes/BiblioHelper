@@ -83,6 +83,7 @@ QLabel#unsavedLabel[unsaved="true"] {
 QWidget#emptyPage { background: #ffffff; }
 QLabel#emptyTitle { font-size: 17pt; font-weight: bold; color: #1f2933; background: transparent; }
 QLabel#emptyState { color: #4a5563; background: transparent; }
+QLabel#sectionTitle { font-size: 14pt; font-weight: bold; color: #1f2933; background: transparent; }
 
 /* ---- Таблица ---- */
 QTableView {
