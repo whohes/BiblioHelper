@@ -21,9 +21,4 @@ target_link_libraries(BiblioHelper PRIVATE
     Qt${QT_VERSION_MAJOR}::Concurrent
     QXlsx::QXlsx)
 
-if(MINGW)
-    # Без зависимости от libgcc/libstdc++ DLL рядом с программой.
-    target_link_options(BiblioHelper PRIVATE -static-libgcc -static-libstdc++)
-endif()
-
 install(TARGETS BiblioHelper RUNTIME DESTINATION .)
