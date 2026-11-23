@@ -69,6 +69,10 @@ struct FundSheet
     bool isWithdrawn(int recordIndex) const { return isWithdrawn(records.at(recordIndex)); }
 };
 
+// Лист «Архив выбывших» в рабочей копии: туда переносятся строки при очистке.
+// При открытии файла этот лист не считается фондом.
+QString archiveSheetName();
+
 // Причины выбытия (решение этапа 1); последняя — «другое».
 QStringList withdrawalReasons();
 // Текст для видимого столбца «Статус»: «Выбыло 23.11.2026, ветхость».

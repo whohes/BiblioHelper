@@ -42,6 +42,8 @@ private slots:
     void withdrawSelected();
     void restoreSelected();
     void createReport();
+    // Очистка после отчёта: два подтверждения, резервная копия, перенос в архив.
+    void cleanupReported(const QStringList &ids);
     void updateCounts();
     void fitColumns(QTableView *table);
     void updateColumnVisibility();

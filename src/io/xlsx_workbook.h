@@ -84,6 +84,12 @@ public:
     // Записать значение (заменяет и формулу, если она была).
     // Оформление ячейки (шрифт, границы, формат) — как у соседней ячейки той же строки.
     bool copyCellStyle(const QString &sheet, int row, int fromColumn, int toColumn, QString *error = nullptr);
+    // Перенести строки листа на лист archiveSheet (создаётся при первом
+    // переносе: строка заголовков и ширины столбцов — как у листа) и удалить
+    // их с листа. Итоги, автофильтр и прочие диапазоны сжимаются.
+    bool archiveRows(const QString &sheet, const QVector<int> &rows, int headerRow, const QString &archiveSheet,
+                     QString *error = nullptr);
+
     // Альбомная печать по ширине, закреплённая шапка и автофильтр (для отчётов).
     bool setReportLayout(const QString &sheet, int headerRow, const QString &filterRef, QString *error = nullptr);
     // Ширина столбца в символах (как в Excel).

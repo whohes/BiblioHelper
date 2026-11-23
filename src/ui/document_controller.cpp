@@ -4,6 +4,7 @@
 
 #include "core/copy_ids.h"
 #include "core/fund_sheet.h"
+#include "core/withdrawal_archive.h"
 #include "core/withdrawal_report.h"
 #include "fund_table_page.h"
 #include "record_dialog.h"
@@ -12,6 +13,7 @@
 #include "filter_header_view.h"
 #include "filter_popup.h"
 
+#include <QCheckBox>
 #include <QDesktopServices>
 #include <QDir>
 #include <QUrl>
@@ -371,7 +373,7 @@ void DocumentController::createReport()
         return;
     }
 
-    QDir reports(QDir::cleanPath(QDir(core::WorkCopies::defaultDirectory()).absoluteFilePath(QStringLiteral("../Отчёты"))));
+    QDir reports(core::WorkCopies::reportsDirectory());
     reports.mkpath(QStringLiteral("."));
     const QString suggested = reports.filePath(
         QStringLiteral("Выбывшие %1.xlsx").arg(QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"))));
@@ -403,17 +405,96 @@ void DocumentController::createReport()
         return;
     }
 
+    // ID экземпляров, вошедших в отчёт: очистка работает только по ним.
+    QStringList reportedIds;
+    for (int row : qAsConst(rows)) {
+        if (m_model->isWithdrawn(row))
+            reportedIds << m_model->index(row, 0).data(models::FundTableModel::IdRole).toString();
+    }
+
     QMessageBox box(m_window);
-    box.setIcon(QMessageBox::Information);
+    box.setIcon(QMessageBox::Question);
     box.setWindowTitle(QStringLiteral("Сформировать Excel"));
-    box.setText(QStringLiteral("Excel-файл успешно сформирован: %1 экз.\n\n%2")
-                    .arg(rows.size())
+    box.setText(QStringLiteral("Excel-файл успешно сформирован: %1 экз.\n%2\n\n"
+                               "Вы хотите очистить выбывшие экземпляры из текущего рабочего списка?")
+                    .arg(reportedIds.size())
                     .arg(QDir::toNativeSeparators(path)));
-    auto *openButton = box.addButton(QStringLiteral("Открыть отчёт"), QMessageBox::AcceptRole);
-    box.addButton(QStringLiteral("Готово"), QMessageBox::RejectRole);
+    auto *clean = box.addButton(QStringLiteral("Да, очистить"), QMessageBox::YesRole);
+    auto *keep = box.addButton(QStringLiteral("Нет, оставить"), QMessageBox::NoRole);
+    box.setDefaultButton(keep);
+    auto *openCheck = new QCheckBox(QStringLiteral("Открыть отчёт"), &box);
+    box.setCheckBox(openCheck);
     box.exec();
-    if (box.clickedButton() == openButton)
+    if (openCheck->isChecked())
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    if (box.clickedButton() == clean)
+        cleanupReported(reportedIds);
+}
+
+void DocumentController::cleanupReported(const QStringList &ids)
+{
+    if (ids.isEmpty())
+        return;
+    QMessageBox confirm(m_window);
+    confirm.setIcon(QMessageBox::Warning);
+    confirm.setWindowTitle(QStringLiteral("Очистка выбывших"));
+    confirm.setText(QStringLiteral(
+        "Будет очищено %1 экз. — только те, что вошли в отчёт.\n\n"
+        "Их строки перейдут с листа фонда на лист «%2» в рабочей копии, а на вкладке «Выбывшие» их "
+        "больше не будет. Остальные книги не изменятся.\n\n"
+        "Перед этим программа сохранит изменения и сделает резервную копию рабочего файла. "
+        "Отменить очистку кнопкой «Отменить» нельзя, только восстановлением резервной копии.\n\n"
+        "Очистить?")
+                        .arg(ids.size())
+                        .arg(core::archiveSheetName()));
+    auto *yes = confirm.addButton(QStringLiteral("Очистить %1 экз.").arg(ids.size()), QMessageBox::AcceptRole);
+    auto *no = confirm.addButton(QStringLiteral("Отмена"), QMessageBox::RejectRole);
+    confirm.setDefaultButton(no);
+    confirm.exec();
+    if (confirm.clickedButton() != yes)
+        return;
+
+    // 1. Несохранённые изменения — в файл, чтобы строки в Excel и в программе совпадали.
+    QString error;
+    if (m_model->isModified()) {
+        save();
+        if (m_model->isModified())
+            return;  // сохранить не удалось, сообщение уже показано
+    }
+    // 2. Резервная копия.
+    const QString backup = core::WorkCopies::backup(m_workPath, QStringLiteral("перед очисткой"), &error);
+    if (backup.isEmpty()) {
+        showError(QStringLiteral("Очистка не выполнена"), error);
+        return;
+    }
+    // 3. Перенос в архив и сохранение.
+    core::FundSheet sheet = m_model->sheet();
+    QVector<int> records;
+    for (const QString &id : ids) {
+        const int row = m_model->rowForId(id);
+        if (row >= 0)
+            records << row;
+    }
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const int moved = core::WithdrawalArchive::archive(m_workbook, &sheet, records, &error);
+    const bool saved = moved >= 0 && m_workbook.saveAs(m_workPath, &error);
+    QApplication::restoreOverrideCursor();
+    if (!saved) {
+        // Файл на диске прежний: перечитываем его, чтобы в памяти не осталось полуготовых правок.
+        QString reopenError;
+        m_workbook.open(m_workPath, &reopenError);
+        showError(QStringLiteral("Очистка не выполнена"),
+                  QStringLiteral("%1\n\nРабочий файл не изменён. Если он открыт в Excel, закройте его и "
+                                 "попробуйте ещё раз.").arg(error));
+        return;
+    }
+    m_model->setSheet(std::move(sheet));
+    m_window->setUnsavedChanges(false);
+    QMessageBox::information(
+        m_window, QStringLiteral("Очистка выбывших"),
+        QStringLiteral("Очищено %1 экз. Их строки — на листе «%2» рабочей копии.\n\nРезервная копия до очистки:\n%3")
+            .arg(moved)
+            .arg(core::archiveSheetName(), QDir::toNativeSeparators(backup)));
 }
 
 void DocumentController::showColumnFilter(FundTablePage *page, models::FundFilterProxy *proxy, int column,

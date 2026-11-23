@@ -318,6 +318,11 @@ bool priceInRubles(const QVariant &value, double *rubles)
     return parseRubles(text, rubles);
 }
 
+QString archiveSheetName()
+{
+    return QStringLiteral("Архив выбывших");
+}
+
 QStringList withdrawalReasons()
 {
     return {QStringLiteral("ветхость"), QStringLiteral("утеря"), QStringLiteral("устаревшая по содержанию"),
@@ -382,7 +387,7 @@ bool FundSheetReader::readBestSheet(const io::XlsxWorkbook &workbook, FundSheet 
     FundSheet best;
     QString firstError;
     for (const QString &sheet : workbook.sheetNames()) {
-        if (workbook.isVeryHidden(sheet))
+        if (workbook.isVeryHidden(sheet) || sheet == archiveSheetName())
             continue;
         FundSheet candidate;
         QString sheetError;
