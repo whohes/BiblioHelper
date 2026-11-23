@@ -1,0 +1,231 @@
+#include "fund_sheet.h"
+
+#include "io/xlsx_workbook.h"
+
+#include <QLocale>
+
+#include <algorithm>
+#include <cmath>
+
+namespace bh::core {
+
+namespace {
+
+constexpr int kHeaderSearchRows = 40;
+constexpr int kMaxColumns = 60;
+
+void setError(QString *error, const QString &message)
+{
+    if (error)
+        *error = message;
+}
+
+QString columnLetter(int column)
+{
+    QString letters;
+    while (column > 0) {
+        const int rem = (column - 1) % 26;
+        letters.prepend(QChar('A' + rem));
+        column = (column - 1) / 26;
+    }
+    return letters;
+}
+
+bool isFilled(const QVariant &v)
+{
+    if (!v.isValid() || v.isNull())
+        return false;
+    if (v.type() == QVariant::String)
+        return !v.toString().trimmed().isEmpty();
+    return true;
+}
+
+int headerScore(const QVector<QVariant> &values)
+{
+    int score = 0;
+    for (const QVariant &v : values) {
+        if (v.type() != QVariant::String)
+            continue;
+        if (FundSheetReader::roleForHeader(v.toString()) != ColumnRole::Other)
+            ++score;
+    }
+    return score;
+}
+
+} // namespace
+
+int FundSheet::columnIndex(ColumnRole role) const
+{
+    for (int i = 0; i < columns.size(); ++i) {
+        if (columns.at(i).role == role)
+            return i;
+    }
+    return -1;
+}
+
+QString normalizeForSearch(const QString &text)
+{
+    QString s = text.toLower();
+    s.replace(QChar(0x0451), QChar(0x0435)); // ё → е
+    return s.simplified();
+}
+
+QString displayText(const QVariant &value)
+{
+    if (!value.isValid() || value.isNull())
+        return {};
+    switch (value.type()) {
+    case QVariant::Double: {
+        const double d = value.toDouble();
+        if (std::isfinite(d) && std::floor(d) == d && std::fabs(d) < 1e15)
+            return QString::number(static_cast<qint64>(d));
+        return QLocale(QLocale::Russian).toString(d, 'g', 12);
+    }
+    case QVariant::Bool:
+        return value.toBool() ? QStringLiteral("Да") : QStringLiteral("Нет");
+    case QVariant::String:
+        return value.toString().simplified();
+    default:
+        return value.toString();
+    }
+}
+
+ColumnRole FundSheetReader::roleForHeader(const QString &header)
+{
+    const QString h = normalizeForSearch(header);
+    if (h.isEmpty())
+        return ColumnRole::Other;
+    if (h.contains(QStringLiteral("автор")) || h.contains(QStringLiteral("назван")))
+        return ColumnRole::AuthorTitle;
+    if (h.contains(QStringLiteral("инв")))
+        return ColumnRole::Inventory;
+    if (h.contains(QStringLiteral("кол")) && (h.contains(QStringLiteral("во")) || h.contains(QStringLiteral("шт"))))
+        return ColumnRole::Quantity;
+    if (h.contains(QStringLiteral("цена")) || h.contains(QStringLiteral("стоим")))
+        return ColumnRole::Price;
+    if (h.contains(QStringLiteral("год")))
+        return ColumnRole::Year;
+    if (h.contains(QStringLiteral("отдел")) || h.contains(QStringLiteral("шифр")))
+        return ColumnRole::Department;
+    if (h.startsWith(QChar(0x2116)) || h.contains(QStringLiteral("п/п")) || h.contains(QStringLiteral("пп")))
+        return ColumnRole::Number;
+    return ColumnRole::Other;
+}
+
+bool FundSheetReader::read(const io::XlsxWorkbook &workbook, const QString &sheet, FundSheet *out,
+                           QString *error)
+{
+    const io::SheetSize size = workbook.sheetSize(sheet);
+    if (size.rows < 2 || size.columns < 1) {
+        setError(error, QStringLiteral("Лист «%1» пустой").arg(sheet));
+        return false;
+    }
+    const int columnCount = std::min(size.columns, kMaxColumns);
+
+    const QVector<io::SheetRow> rows = workbook.readRows(sheet, 1, size.rows, columnCount, error);
+    if (rows.isEmpty()) {
+        setError(error, QStringLiteral("Лист «%1» пустой").arg(sheet));
+        return false;
+    }
+
+    // Строка заголовков: в первых строках листа, больше всего «узнаваемых» названий.
+    int headerIndex = -1;
+    int bestScore = 1;
+    for (int i = 0; i < rows.size() && rows.at(i).row <= kHeaderSearchRows; ++i) {
+        const int score = headerScore(rows.at(i).values);
+        if (score > bestScore) {
+            bestScore = score;
+            headerIndex = i;
+        }
+    }
+    if (headerIndex < 0) {
+        setError(error, QStringLiteral("На листе «%1» не найдена строка с заголовками столбцов "
+                                       "(«Автор и название», «Инв. №»…)").arg(sheet));
+        return false;
+    }
+    const QVector<QVariant> &header = rows.at(headerIndex).values;
+
+    // Какие столбцы заполнены хотя бы в одной строке ниже заголовка.
+    QVector<bool> used(columnCount, false);
+    for (int i = headerIndex + 1; i < rows.size(); ++i) {
+        const auto &values = rows.at(i).values;
+        for (int c = 0; c < columnCount; ++c)
+            used[c] = used[c] || isFilled(values.at(c));
+    }
+
+    FundSheet result;
+    result.sheetName = sheet;
+    result.headerRow = rows.at(headerIndex).row;
+    for (int c = 0; c < columnCount; ++c) {
+        const QString title = displayText(header.at(c));
+        if (title.isEmpty() && !used[c])
+            continue;
+        FundColumn column;
+        column.excelColumn = c + 1;
+        if (title.isEmpty()) {
+            column.role = ColumnRole::Mark;
+            column.title = QStringLiteral("Пометка (%1)").arg(columnLetter(c + 1));
+        } else {
+            column.role = roleForHeader(title);
+            column.title = title;
+            // «автор книги и название» → «Автор книги и название»
+            column.title[0] = column.title.at(0).toUpper();
+        }
+        result.columns.push_back(column);
+    }
+
+    const int authorCol = result.columnIndex(ColumnRole::AuthorTitle);
+    const int numberCol = result.columnIndex(ColumnRole::Number);
+    const int invCol = result.columnIndex(ColumnRole::Inventory);
+    const int yearCol = result.columnIndex(ColumnRole::Year);
+
+    for (int i = headerIndex + 1; i < rows.size(); ++i) {
+        const auto &source = rows.at(i).values;
+        FundRecord record;
+        record.excelRow = rows.at(i).row;
+        record.values.reserve(result.columns.size());
+        int filled = 0;
+        for (const FundColumn &column : qAsConst(result.columns)) {
+            const QVariant v = source.at(column.excelColumn - 1);
+            record.values.push_back(v);
+            filled += isFilled(v) ? 1 : 0;
+        }
+        auto has = [&](int idx) { return idx >= 0 && isFilled(record.values.at(idx)); };
+        bool isBook;
+        if (authorCol >= 0)
+            isBook = has(authorCol) && (has(numberCol) || has(invCol) || has(yearCol));
+        else
+            isBook = filled >= 2;
+        if (isBook)
+            result.records.push_back(std::move(record));
+    }
+
+    *out = std::move(result);
+    return true;
+}
+
+bool FundSheetReader::readBestSheet(const io::XlsxWorkbook &workbook, FundSheet *out, QString *error)
+{
+    FundSheet best;
+    QString firstError;
+    for (const QString &sheet : workbook.sheetNames()) {
+        if (workbook.isVeryHidden(sheet))
+            continue;
+        FundSheet candidate;
+        QString sheetError;
+        if (FundSheetReader::read(workbook, sheet, &candidate, &sheetError)) {
+            if (candidate.records.size() > best.records.size())
+                best = std::move(candidate);
+        } else if (firstError.isEmpty()) {
+            firstError = sheetError;
+        }
+    }
+    if (best.columns.isEmpty()) {
+        setError(error, firstError.isEmpty() ? QStringLiteral("В файле нет листов с книгами") : firstError);
+        return false;
+    }
+    *out = std::move(best);
+    return true;
+}
+
+} // namespace bh::core

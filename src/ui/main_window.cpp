@@ -1,14 +1,18 @@
 #include "main_window.h"
 
+#include "filter_header_view.h"
+
 #include <QCloseEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabWidget>
+#include <QTableView>
 #include <QTextBrowser>
 #include <QVBoxLayout>
 
@@ -142,15 +146,64 @@ QWidget *MainWindow::createSearchRow()
 
 QWidget *MainWindow::createBooksTab()
 {
+    m_booksStack = new QStackedWidget;
+
     m_booksMessage = createEmptyState(QStringLiteral(
         "Здесь появится список книг.\n\nНажмите «Открыть Excel» и выберите файл с книжным фондом."));
     m_booksMessage->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    return m_booksMessage;
+    m_booksStack->addWidget(m_booksMessage);
+
+    auto *page = new QWidget;
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    m_booksTable = new QTableView(page);
+    m_booksHeader = new FilterHeaderView(m_booksTable);
+    m_booksTable->setHorizontalHeader(m_booksHeader);
+    m_booksTable->setSortingEnabled(true);
+    m_booksTable->setAlternatingRowColors(true);
+    m_booksTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_booksTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_booksTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_booksTable->setWordWrap(false);
+    m_booksTable->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_booksTable->verticalHeader()->setDefaultSectionSize(m_booksTable->fontMetrics().height() + 14);
+    m_booksTable->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    m_booksTable->verticalHeader()->setToolTip(QStringLiteral("Номер строки в Excel"));
+    layout->addWidget(m_booksTable, 1);
+
+    m_countLabel = new QLabel(page);
+    m_countLabel->setObjectName(QStringLiteral("countLabel"));
+    layout->addWidget(m_countLabel);
+
+    m_booksStack->addWidget(page);
+    return m_booksStack;
 }
 
 void MainWindow::setBooksMessage(const QString &text)
 {
     m_booksMessage->setText(text);
+    m_booksStack->setCurrentIndex(0);
+}
+
+void MainWindow::showBooksTable(QAbstractItemModel *model)
+{
+    m_booksTable->setModel(model);
+    m_booksTable->sortByColumn(-1, Qt::AscendingOrder);  // порядок как в файле
+    m_booksHeader->setSortIndicator(-1, Qt::AscendingOrder);
+    m_booksStack->setCurrentIndex(1);
+}
+
+void MainWindow::setRecordCount(int shown, int total, bool filtered)
+{
+    m_countLabel->setText(filtered
+                              ? QStringLiteral("Показано %1 из %2 экземпляров. Включены поиск или фильтры — "
+                                               "«Сбросить фильтры» покажет все.").arg(shown).arg(total)
+                              : QStringLiteral("Всего экземпляров: %1").arg(total));
+    m_countLabel->setProperty("filtered", filtered);
+    m_countLabel->style()->unpolish(m_countLabel);
+    m_countLabel->style()->polish(m_countLabel);
 }
 
 QWidget *MainWindow::createWithdrawnTab()
@@ -175,6 +228,14 @@ QWidget *MainWindow::createHelpTab()
         "<p>2. Программа сделает <b>рабочую копию</b> файла в папке «Документы\\BiblioHelper\\Рабочие файлы». "
         "Ваш исходный файл останется без изменений.</p>"
         "<p>3. Все изменения попадают в рабочую копию после нажатия <b>«Сохранить»</b>.</p>"
+        "<h2>Поиск и фильтры</h2>"
+        "<p><b>Поиск</b>: начните вводить название, автора или инвентарный номер в строке поиска. "
+        "Можно вводить несколько слов: «абгарян яблоки». Большие и маленькие буквы, «е» и «ё» не различаются.</p>"
+        "<p><b>Сортировка</b>: щёлкните по названию столбца. Второй щелчок — в обратном порядке.</p>"
+        "<p><b>Фильтр</b>: нажмите значок <b>▼</b> справа в названии столбца и отметьте нужные значения, "
+        "как в Excel. Столбец с фильтром подсвечен жёлтым.</p>"
+        "<p>Кнопка <b>«Сбросить фильтры»</b> снова показывает все книги.</p>"
+        "<p>Слева у каждой строки — её номер в Excel-файле.</p>"
         "<p>Подробная справка появится в следующих версиях программы.</p>"));
     return help;
 }
