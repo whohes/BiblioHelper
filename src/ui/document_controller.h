@@ -6,6 +6,7 @@
 #include "models/fund_table_model.h"
 
 #include <QObject>
+#include <QSet>
 #include <QTimer>
 
 class QTableView;
@@ -38,6 +39,7 @@ private slots:
     void addBook();
     void editSelected();
     void editRow(int modelRow);
+    void finishImport(const QSet<QString> &withdrawnMarks);
     void undo();
     void withdrawSelected();
     void restoreSelected();

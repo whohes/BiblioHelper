@@ -2,12 +2,18 @@
 add_library(bh_core STATIC
     core/copy_ids.h
     core/copy_ids.cpp
+    core/csv_import.h
+    core/csv_import.cpp
     core/fund_sheet.h
     core/fund_sheet.cpp
+    core/import_layout.h
+    core/import_layout.cpp
     core/withdrawal_archive.h
     core/withdrawal_archive.cpp
     core/withdrawal_report.h
     core/withdrawal_report.cpp
+    core/xls_import.h
+    core/xls_import.cpp
     core/work_copy.h
     core/work_copy.cpp
     io/xlsx_font_colors.h
@@ -24,7 +30,7 @@ add_library(bh_core STATIC
 target_include_directories(bh_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(bh_core
     PUBLIC  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
-    PRIVATE OpenXLSX::OpenXLSX QXlsx::QXlsx)
+    PRIVATE OpenXLSX::OpenXLSX QXlsx::QXlsx xls)
 # pugixml (внутри OpenXLSX) — для правки XML листа при добавлении строк.
 if(TARGET pugixml-static)
     target_link_libraries(bh_core PRIVATE pugixml-static)
@@ -42,6 +48,8 @@ add_executable(BiblioHelper WIN32
     ui/fund_table_page.h
     ui/icons.h
     ui/icons.cpp
+    ui/import_wizard.h
+    ui/import_wizard.cpp
     ui/fund_table_page.cpp
     ui/filter_popup.cpp
     ui/record_dialog.h

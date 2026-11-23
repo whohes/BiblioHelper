@@ -1,5 +1,8 @@
 #include "document_controller.h"
 
+#include "core/import_layout.h"
+#include "ui/import_wizard.h"
+
 #include "main_window.h"
 
 #include "core/copy_ids.h"
@@ -24,6 +27,7 @@
 #include <QSettings>
 #include <QApplication>
 #include <QLocale>
+#include <QMap>
 #include <QScreen>
 #include <QStatusBar>
 #include <QTableView>
@@ -559,7 +563,7 @@ void DocumentController::open()
                                             QDir::homePath()).toString();
     const QString path = QFileDialog::getOpenFileName(
         m_window, QStringLiteral("Выберите Excel-файл с книжным фондом"), startDir,
-        QStringLiteral("Файлы Excel (*.xlsx *.xls);;Все файлы (*)"));
+        QStringLiteral("Файлы Excel и CSV (*.xlsx *.xls *.csv);;Все файлы (*)"));
     if (path.isEmpty())
         return;
     settings.setValue(kLastDirKey, QFileInfo(path).absolutePath());
@@ -570,10 +574,18 @@ bool DocumentController::openFile(const QString &path)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
     if (suffix == QLatin1String("xls")) {
-        showError(QStringLiteral("Старый формат Excel"),
-                  QStringLiteral("Файлы XLS (Excel 97–2003) программа научится открывать позже.\n\n"
-                                 "Пока откройте файл в Excel и сохраните его как «Книга Excel (*.xlsx)»."));
-        return false;
+        QMessageBox box(QMessageBox::Information, QStringLiteral("Старый формат Excel"),
+                        QStringLiteral("Это файл Excel 97–2003 (.xls). Программа перенесёт данные в новый файл "
+                                       ".xlsx (рабочую копию) и дальше будет работать с ним.\n\n"
+                                       "Переносятся только значения ячеек: шрифты, цвета, ширина столбцов и "
+                                       "рамки не переносятся. Исходный файл не изменится."),
+                        QMessageBox::NoButton, m_window);
+        auto *proceed = box.addButton(QStringLiteral("Продолжить"), QMessageBox::AcceptRole);
+        box.addButton(QStringLiteral("Отмена"), QMessageBox::RejectRole);
+        box.setDefaultButton(proceed);
+        box.exec();
+        if (box.clickedButton() != proceed)
+            return false;
     }
 
     QString error;
@@ -582,6 +594,37 @@ bool DocumentController::openFile(const QString &path)
         showError(QStringLiteral("Не удалось открыть файл"), error);
         return false;
     }
+
+    // Файл, который программа видит впервые (нет сохранённых настроек чтения),
+    // открывается через мастер импорта. Мастер читает свою копию книги, чтобы
+    // «Отмена» не закрывала уже открытый документ.
+    bool imported = false;
+    core::ImportLayout layout;
+    QSet<QString> withdrawnMarks;
+    {
+        io::XlsxWorkbook probe;
+        if (!probe.open(workPath, &error)) {
+            QFile::remove(workPath);
+            showError(QStringLiteral("Не удалось открыть файл"),
+                      QStringLiteral("Файл «%1» не удалось прочитать как Excel-файл.\n\n%2")
+                          .arg(QFileInfo(path).fileName(), error));
+            return false;
+        }
+        layout = core::ImportLayout::load(probe);
+        if (!layout.isValid() || !probe.sheetNames().contains(layout.sheet)) {
+            ImportWizard wizard(probe, QFileInfo(path).fileName(), m_window);
+            if (wizard.exec() != QDialog::Accepted) {
+                probe.close();
+                QFile::remove(workPath);
+                m_window->statusBar()->showMessage(QStringLiteral("Импорт отменён"), 5000);
+                return false;
+            }
+            layout = wizard.layout();
+            withdrawnMarks = wizard.withdrawnMarks();
+            imported = true;
+        }
+    }
+
     if (!m_workbook.open(workPath, &error)) {
         QFile::remove(workPath);
         showError(QStringLiteral("Не удалось открыть файл"),
@@ -598,7 +641,7 @@ bool DocumentController::openFile(const QString &path)
     QApplication::setOverrideCursor(Qt::WaitCursor);
     core::FundSheet sheet;
     QString readError;
-    const bool read = core::FundSheetReader::readBestSheet(m_workbook, &sheet, &readError);
+    const bool read = core::FundSheetReader::read(m_workbook, layout, &sheet, &readError);
     if (read) {
         // Цвет шрифта (ветхие / устаревшие) — отдельным чтением, только для показа.
         core::FundSheetReader::applyFontColors(&sheet, io::readFontColors(workPath, sheet.sheetName));
@@ -627,18 +670,50 @@ bool DocumentController::openFile(const QString &path)
                 .arg(QFileInfo(path).fileName(), sheetName)
                 .arg(headerRow)
                 .arg(QDir::toNativeSeparators(workPath)));
+        if (imported)
+            finishImport(withdrawnMarks);
     } else {
         m_model->setSheet({});
         m_window->withdrawnPage()->setMessage(QStringLiteral("В файле не найден список книг."));
         m_window->booksPage()->setMessage(
-            QStringLiteral("Файл открыт, но список книг в нём не найден.\n\n%1\n\n"
-                           "Мастер импорта для файлов другого вида появится в следующих версиях.")
-                .arg(readError));
+            QStringLiteral("Файл открыт, но список книг в нём не найден.\n\n%1").arg(readError));
         m_window->statusBar()->showMessage(
             QStringLiteral("Открыт файл «%1». Рабочая копия: %2")
                 .arg(QFileInfo(path).fileName(), QDir::toNativeSeparators(workPath)));
     }
     return true;
+}
+
+void DocumentController::finishImport(const QSet<QString> &withdrawnMarks)
+{
+    // Настройки мастера и ID экземпляров сразу пишем в рабочую копию:
+    // при следующем открытии мастер уже не нужен.
+    QString error;
+    if (!core::CopyIds::save(m_workbook, m_model->sheet(), &error) || !m_workbook.saveAs(m_workPath, &error)) {
+        m_window->statusBar()->showMessage(
+            QStringLiteral("Настройки импорта не записаны в рабочую копию: %1. Они запишутся при «Сохранить».")
+                .arg(error));
+    }
+
+    // Пометки «нет на месте» → выбытие (отдельное действие для отмены на каждую пометку).
+    const QHash<int, QString> marked = core::recordsWithMarks(m_model->sheet(), withdrawnMarks);
+    if (marked.isEmpty())
+        return;
+    QMap<QString, QVector<int>> byMark;
+    for (auto it = marked.constBegin(); it != marked.constEnd(); ++it)
+        byMark[it.value()].push_back(it.key());
+    const QDate today = QDate::currentDate();
+    int total = 0;
+    for (auto it = byMark.begin(); it != byMark.end(); ++it) {
+        std::sort(it->begin(), it->end());
+        total += m_model->withdraw(*it, today, core::markWithdrawalReason(),
+                                   QStringLiteral("пометка «%1»").arg(it.key()));
+    }
+    updateCounts();
+    m_window->statusBar()->showMessage(
+        QStringLiteral("По пометкам в файле отмечено выбывшими %1 экз. Они на вкладке «Выбывшие». "
+                       "Нажмите «Сохранить», чтобы записать это в рабочую копию.")
+            .arg(total));
 }
 
 void DocumentController::fitColumns(QTableView *table)

@@ -16,6 +16,8 @@ using FontColors = QHash<QPair<int, int>, QRgb>;
 
 namespace bh::core {
 
+struct ImportLayout;
+
 // Что означает столбец фонда. Определяется по заголовку; столбцы без
 // заголовка (пометки «*», «сп», «инв» в H/I) считаются пометками.
 enum class ColumnRole {
@@ -86,8 +88,13 @@ public:
     // =SUM) записями не считаются.
     static bool read(const io::XlsxWorkbook &workbook, const QString &sheet, FundSheet *out,
                      QString *error = nullptr);
+    // Читает лист так, как настроили в мастере импорта: строка заголовков
+    // и назначение столбцов заданы, а не угадываются.
+    static bool read(const io::XlsxWorkbook &workbook, const ImportLayout &layout, FundSheet *out,
+                     QString *error = nullptr);
 
-    // Читает все листы и возвращает лист с наибольшим числом записей.
+    // Если в файле сохранены настройки мастера импорта — читает по ним.
+    // Иначе читает все листы и возвращает лист с наибольшим числом записей.
     static bool readBestSheet(const io::XlsxWorkbook &workbook, FundSheet *out,
                               QString *error = nullptr);
 
@@ -103,6 +110,11 @@ public:
     // синий — «Устаревшая», другие цвета — «Зелёный шрифт» и т. п.
     // Цвет строки — цвет её ячеек; если цветов несколько — через запятую.
     static void applyFontColors(FundSheet *sheet, const io::FontColors &colors);
+
+private:
+    // headerRow = 0 — искать строку заголовков; roles — назначение столбцов по номеру столбца Excel.
+    static bool readSheet(const io::XlsxWorkbook &workbook, const QString &sheet, int headerRow,
+                          const QHash<int, ColumnRole> *roles, FundSheet *out, QString *error);
 };
 
 // Строка для поиска и сравнения: нижний регистр, ё → е, одиночные пробелы.

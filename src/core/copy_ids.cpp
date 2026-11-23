@@ -1,5 +1,6 @@
 #include "copy_ids.h"
 
+#include "import_layout.h"
 #include "io/xlsx_workbook.h"
 
 #include <QCryptographicHash>
@@ -78,7 +79,11 @@ bool CopyIds::save(io::XlsxWorkbook &workbook, const FundSheet &sheet, QString *
         }
         rows.push_back(row);
     }
-    return workbook.replaceSheetText(sheetName(), rows, error);
+    if (!workbook.replaceSheetText(sheetName(), rows, error))
+        return false;
+    // Вместе с ID — настройки чтения листа, чтобы при следующем открытии
+    // не спрашивать мастер импорта снова.
+    return ImportLayout::fromSheet(sheet).save(workbook, error);
 }
 
 int CopyIds::assign(FundSheet *sheet, const QVector<Entry> &entries)

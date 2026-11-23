@@ -27,3 +27,12 @@ if(MINGW)
     target_link_options(test_editing PRIVATE -static-libgcc -static-libstdc++)
 endif()
 add_test(NAME editing COMMAND test_editing)
+
+add_executable(test_import test_import.cpp)
+target_compile_definitions(test_import PRIVATE
+    BH_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+target_link_libraries(test_import PRIVATE bh_core Qt${QT_VERSION_MAJOR}::Test)
+if(MINGW)
+    target_link_options(test_import PRIVATE -static-libgcc -static-libstdc++)
+endif()
+add_test(NAME import COMMAND test_import)
