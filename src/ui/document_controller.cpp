@@ -3,6 +3,7 @@
 #include "main_window.h"
 
 #include "core/fund_sheet.h"
+#include "io/xlsx_font_colors.h"
 #include "filter_header_view.h"
 #include "filter_popup.h"
 
@@ -69,7 +70,7 @@ void DocumentController::updateCounts()
 {
     QList<int> filtered;
     for (int c = 0; c < m_model->columnCount(); ++c) {
-        if (m_proxy->hasColumnFilter(c))
+        if (m_proxy->isColumnFiltered(c))
             filtered << c;
     }
     m_window->booksHeader()->setFilteredColumns(filtered);
@@ -84,8 +85,10 @@ void DocumentController::showColumnFilter(int column, const QPoint &globalPos)
     const auto values = m_proxy->columnValues(column);
     QApplication::restoreOverrideCursor();
 
+    const models::ColumnCondition condition = m_proxy->columnCondition(column);
     FilterPopup popup(m_model->sheet().columns.at(column).title, values, m_proxy->columnFilter(column),
-                      m_proxy->hasColumnFilter(column), m_window);
+                      m_proxy->hasColumnFilter(column),
+                      m_proxy->hasColumnCondition(column) ? &condition : nullptr, m_window);
     // Окно — под заголовком столбца, но в пределах экрана.
     popup.adjustSize();
     QPoint pos = globalPos;
@@ -107,6 +110,9 @@ void DocumentController::showColumnFilter(int column, const QPoint &globalPos)
             m_proxy->clearColumnFilter(column);
         else
             m_proxy->setColumnFilter(column, popup.checkedValues());
+        break;
+    case FilterPopup::Result::ApplyCondition:
+        m_proxy->setColumnCondition(column, popup.condition());
         break;
     case FilterPopup::Result::Clear:
         m_proxy->clearColumnFilter(column);
@@ -172,6 +178,10 @@ bool DocumentController::openFile(const QString &path)
     core::FundSheet sheet;
     QString readError;
     const bool read = core::FundSheetReader::readBestSheet(m_workbook, &sheet, &readError);
+    if (read) {
+        // Цвет шрифта (ветхие / устаревшие) — отдельным чтением, только для показа.
+        core::FundSheetReader::applyFontColors(&sheet, io::readFontColors(workPath, sheet.sheetName));
+    }
     QApplication::restoreOverrideCursor();
 
     m_searchTimer.stop();

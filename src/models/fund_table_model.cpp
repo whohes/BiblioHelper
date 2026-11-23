@@ -1,17 +1,38 @@
 #include "fund_table_model.h"
 
+#include <QColor>
+#include <QLocale>
+#include <QRegularExpression>
+
 namespace bh::models {
 
 namespace {
 
+// Старая запись цены: «2р20к», «202р», «44 р. 10 коп.» → рубли.
+bool parseRubles(const QString &text, double *rubles)
+{
+    static const QRegularExpression re(
+        QStringLiteral("^\\s*(\\d+)\\s*р(?:уб)?\\.?\\s*(?:(\\d{1,2})\\s*к(?:оп)?\\.?)?\\s*$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch m = re.match(text);
+    if (!m.hasMatch())
+        return false;
+    *rubles = m.captured(1).toDouble() + (m.captured(2).isEmpty() ? 0.0 : m.captured(2).toDouble() / 100.0);
+    return true;
+}
+
 // Число для сортировки: числа и текст вида «2018» сортируются как числа.
-QVariant sortKeyFor(const QVariant &value, const QString &display)
+QVariant sortKeyFor(const QVariant &value, const QString &display, core::ColumnRole role)
 {
     if (value.type() == QVariant::Double || value.type() == QVariant::LongLong
         || value.type() == QVariant::Int)
         return value.toDouble();
     bool ok = false;
-    const double d = display.toDouble(&ok);
+    double d = display.toDouble(&ok);
+    if (!ok)
+        d = QLocale(QLocale::Russian).toDouble(display, &ok);  // «2,4»
+    if (!ok && role == core::ColumnRole::Price)
+        ok = parseRubles(display, &d);
     if (ok)
         return d;
     return core::normalizeForSearch(display);
@@ -33,11 +54,12 @@ void FundTableModel::setSheet(core::FundSheet sheet)
     for (const core::FundRecord &record : qAsConst(m_sheet.records)) {
         QVector<Cell> row;
         row.reserve(record.values.size());
-        for (const QVariant &value : record.values) {
+        for (int c = 0; c < record.values.size(); ++c) {
+            const QVariant &value = record.values.at(c);
             Cell cell;
             cell.display = core::displayText(value);
             cell.search = core::normalizeForSearch(cell.display);
-            cell.sortKey = sortKeyFor(value, cell.display);
+            cell.sortKey = sortKeyFor(value, cell.display, m_sheet.columns.at(c).role);
             row.push_back(std::move(cell));
         }
         m_cells.push_back(std::move(row));
@@ -73,6 +95,13 @@ QVariant FundTableModel::data(const QModelIndex &index, int role) const
         return cell.search;
     case ExcelRowRole:
         return m_sheet.records.at(index.row()).excelRow;
+    case Qt::ForegroundRole: {
+        // Цвет шрифта как в Excel: ветхие и устаревшие книги видны сразу.
+        const auto &colors = m_sheet.records.at(index.row()).colors;
+        if (index.column() < colors.size() && colors.at(index.column()) != 0)
+            return QColor::fromRgb(colors.at(index.column()));
+        return {};
+    }
     case Qt::TextAlignmentRole: {
         const auto role = m_sheet.columns.at(index.column()).role;
         if (role == core::ColumnRole::AuthorTitle)

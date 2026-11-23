@@ -1,12 +1,14 @@
 // Чтение листа фонда, поиск, фильтры и сортировка на образцах фондов.
 
 #include "core/fund_sheet.h"
+#include "io/xlsx_font_colors.h"
 #include "io/xlsx_workbook.h"
 #include "models/fund_filter_proxy.h"
 #include "models/fund_table_model.h"
 
 #include <QDir>
 #include <QElapsedTimer>
+#include <QColor>
 #include <QtTest>
 
 using bh::core::ColumnRole;
@@ -21,6 +23,9 @@ private slots:
     void searchAndFilters();
     void sorting();
     void normalize();
+    void fontColors();
+    void conditions();
+    void prices();
 
 private:
     static QString dataPath(const QString &name)
@@ -190,6 +195,122 @@ void FundTableTest::normalize()
     QCOMPARE(bh::core::FundSheetReader::roleForHeader(QStringLiteral("Инв. №")), ColumnRole::Inventory);
     QCOMPARE(bh::core::FundSheetReader::roleForHeader(QStringLiteral("№ п/п")), ColumnRole::Number);
     QCOMPARE(bh::core::FundSheetReader::roleForHeader(QStringLiteral("кол-во шт.")), ColumnRole::Quantity);
+}
+
+void FundTableTest::fontColors()
+{
+    // Богдановка: 13 названий красным; Бобринка: пометки в H синим и красным.
+    auto sheetWithColors = [](const QString &file) {
+        bh::core::FundSheet sheet = load(file);
+        QString error;
+        const auto colors = bh::io::readFontColors(dataPath(file), sheet.sheetName, &error);
+        bh::core::FundSheetReader::applyFontColors(&sheet, colors);
+        return sheet;
+    };
+    auto countMarks = [](const bh::core::FundSheet &sheet) {
+        QHash<QString, int> counts;
+        const int col = sheet.columnIndex(ColumnRole::ColorMark);
+        if (col < 0)
+            return counts;
+        for (const auto &record : sheet.records) {
+            const QString mark = bh::core::displayText(record.values.at(col));
+            if (!mark.isEmpty())
+                ++counts[mark];
+        }
+        return counts;
+    };
+
+    const auto bobrinka = sheetWithColors(QStringLiteral("fund_bobrinka.xlsx"));
+    QVERIFY(bobrinka.columnIndex(ColumnRole::ColorMark) >= 0);
+    const auto b = countMarks(bobrinka);
+    // Числа сверены с openpyxl: непустые цветные ячейки в строках книг
+    // (пустая ячейка с цветом пометкой не считается).
+    QCOMPARE(b.value(QStringLiteral("Устаревшая")), 253);
+    QCOMPARE(b.value(QStringLiteral("Ветхая")), 111);
+
+    const auto bogdanovka = sheetWithColors(QStringLiteral("fund_bogdanovka_2025.xlsx"));
+    const auto g = countMarks(bogdanovka);
+    QVERIFY(g.value(QStringLiteral("Ветхая")) >= 13);
+    QCOMPARE(g.size(), 1);
+
+    // Цвет виден в таблице.
+    bh::models::FundTableModel model;
+    model.setSheet(bogdanovka);
+    const int author = bogdanovka.columnIndex(ColumnRole::AuthorTitle);
+    bool foundRed = false;
+    for (int r = 0; r < model.rowCount() && !foundRed; ++r) {
+        const QVariant fg = model.index(r, author).data(Qt::ForegroundRole);
+        foundRed = fg.isValid() && fg.value<QColor>() == QColor(Qt::red);
+    }
+    QVERIFY(foundRed);
+
+    QCOMPARE(bh::io::colorName(qRgb(0, 0, 0)), QString());
+    QCOMPARE(bh::io::colorName(qRgb(0x80, 0x80, 0x80)), QString());
+    QCOMPARE(bh::io::colorName(qRgb(0x00, 0xb0, 0xf0)), QStringLiteral("Синий"));
+}
+
+void FundTableTest::conditions()
+{
+    using Op = bh::models::ColumnCondition::Op;
+    bh::models::FundTableModel model;
+    model.setSheet(load(QStringLiteral("fund_bobrinka.xlsx")));
+    bh::models::FundFilterProxy proxy;
+    proxy.setSourceModel(&model);
+    const int year = model.sheet().columnIndex(ColumnRole::Year);
+    const int author = model.sheet().columnIndex(ColumnRole::AuthorTitle);
+
+    bh::models::ColumnCondition between;
+    between.op = Op::Between;
+    between.a = 2020;
+    between.b = 2010;  // порядок границ не важен
+    proxy.setColumnCondition(year, between);
+    QVERIFY(proxy.rowCount() > 0);
+    for (int r = 0; r < proxy.rowCount(); ++r) {
+        const double y = proxy.index(r, year).data(bh::models::FundTableModel::SortRole).toDouble();
+        QVERIFY(y >= 2010 && y <= 2020);
+    }
+    QVERIFY(proxy.isColumnFiltered(year));
+    QCOMPARE(between.describe(), QStringLiteral("между 2020 и 2010"));
+
+    bh::models::ColumnCondition contains;
+    contains.op = Op::Contains;
+    contains.text = QStringLiteral("ВЕЛИКИХ");
+    proxy.setColumnCondition(author, contains);
+    QVERIFY(proxy.rowCount() > 0);
+    for (int r = 0; r < proxy.rowCount(); ++r)
+        QVERIFY(proxy.index(r, author).data().toString().contains(QStringLiteral("великих"), Qt::CaseInsensitive));
+
+    // Список значений заменяет условие в том же столбце.
+    proxy.setColumnFilter(year, {QStringLiteral("2009")});
+    QVERIFY(!proxy.hasColumnCondition(year));
+    proxy.clearColumnFilter(author);
+    QVERIFY(!proxy.isColumnFiltered(author));
+
+    bh::models::ColumnCondition empty;
+    empty.op = Op::Empty;
+    proxy.clearAllFilters();
+    proxy.setColumnCondition(model.sheet().columnIndex(ColumnRole::Mark), empty);
+    const int emptyMarks = proxy.rowCount();
+    empty.op = Op::NotEmpty;
+    proxy.setColumnCondition(model.sheet().columnIndex(ColumnRole::Mark), empty);
+    QCOMPARE(emptyMarks + proxy.rowCount(), model.rowCount());
+}
+
+void FundTableTest::prices()
+{
+    // Старая запись цен «202р», «44р10к» сортируется и фильтруется как число.
+    bh::models::FundTableModel model;
+    model.setSheet(load(QStringLiteral("fund_bogdanovka_2025.xlsx")));
+    const int price = model.sheet().columnIndex(ColumnRole::Price);
+    bool found = false;
+    for (int r = 0; r < model.rowCount(); ++r) {
+        if (model.index(r, price).data().toString() == QStringLiteral("44р10к")) {
+            QCOMPARE(model.index(r, price).data(bh::models::FundTableModel::SortRole).toDouble(), 44.10);
+            found = true;
+            break;
+        }
+    }
+    QVERIFY(found);
 }
 
 QTEST_GUILESS_MAIN(FundTableTest)

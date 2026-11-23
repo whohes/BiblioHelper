@@ -9,6 +9,74 @@
 
 namespace bh::models {
 
+bool ColumnCondition::isNumeric(Op op)
+{
+    return op == Op::Greater || op == Op::GreaterEqual || op == Op::Less || op == Op::LessEqual
+        || op == Op::Between;
+}
+
+bool ColumnCondition::needsValue(Op op)
+{
+    return op != Op::Empty && op != Op::NotEmpty;
+}
+
+QString ColumnCondition::label(Op op)
+{
+    switch (op) {
+    case Op::Contains: return QStringLiteral("содержит");
+    case Op::NotContains: return QStringLiteral("не содержит");
+    case Op::StartsWith: return QStringLiteral("начинается с");
+    case Op::Equals: return QStringLiteral("равно");
+    case Op::Greater: return QStringLiteral("больше");
+    case Op::GreaterEqual: return QStringLiteral("больше или равно");
+    case Op::Less: return QStringLiteral("меньше");
+    case Op::LessEqual: return QStringLiteral("меньше или равно");
+    case Op::Between: return QStringLiteral("между");
+    case Op::Empty: return QStringLiteral("пусто");
+    case Op::NotEmpty: return QStringLiteral("не пусто");
+    }
+    return {};
+}
+
+QString ColumnCondition::describe() const
+{
+    QLocale ru(QLocale::Russian);
+    ru.setNumberOptions(QLocale::OmitGroupSeparator);  // «2020», а не «2 020»
+    if (op == Op::Between)
+        return QStringLiteral("между %1 и %2").arg(ru.toString(a), ru.toString(b));
+    if (isNumeric(op))
+        return QStringLiteral("%1 %2").arg(label(op), ru.toString(a));
+    if (needsValue(op))
+        return QStringLiteral("%1 «%2»").arg(label(op), text);
+    return label(op);
+}
+
+bool ColumnCondition::matches(const QString &normalizedText, const QVariant &sortKey) const
+{
+    const QString needle = core::normalizeForSearch(text);
+    switch (op) {
+    case Op::Contains: return normalizedText.contains(needle);
+    case Op::NotContains: return !normalizedText.contains(needle);
+    case Op::StartsWith: return normalizedText.startsWith(needle);
+    case Op::Equals: return normalizedText == needle;
+    case Op::Empty: return normalizedText.isEmpty();
+    case Op::NotEmpty: return !normalizedText.isEmpty();
+    default: break;
+    }
+    // Числовые условия: текст, который не число («б/н»), не подходит.
+    if (sortKey.type() != QVariant::Double)
+        return false;
+    const double v = sortKey.toDouble();
+    switch (op) {
+    case Op::Greater: return v > a;
+    case Op::GreaterEqual: return v >= a;
+    case Op::Less: return v < a;
+    case Op::LessEqual: return v <= a;
+    case Op::Between: return v >= std::min(a, b) && v <= std::max(a, b);
+    default: return false;
+    }
+}
+
 FundFilterProxy::FundFilterProxy(QObject *parent)
     : QSortFilterProxyModel(parent)
     , m_collator(QLocale(QLocale::Russian, QLocale::Russia))
@@ -34,8 +102,17 @@ void FundFilterProxy::setSearchText(const QString &text)
     emit filtersChanged();
 }
 
+void FundFilterProxy::setColumnCondition(int column, const ColumnCondition &condition)
+{
+    m_columnFilters.remove(column);
+    m_conditions.insert(column, condition);
+    invalidateFilter();
+    emit filtersChanged();
+}
+
 void FundFilterProxy::setColumnFilter(int column, const QSet<QString> &allowed)
 {
+    m_conditions.remove(column);
     m_columnFilters.insert(column, allowed);
     invalidateFilter();
     emit filtersChanged();
@@ -43,7 +120,7 @@ void FundFilterProxy::setColumnFilter(int column, const QSet<QString> &allowed)
 
 void FundFilterProxy::clearColumnFilter(int column)
 {
-    if (m_columnFilters.remove(column) == 0)
+    if (m_columnFilters.remove(column) + m_conditions.remove(column) == 0)
         return;
     invalidateFilter();
     emit filtersChanged();
@@ -52,6 +129,7 @@ void FundFilterProxy::clearColumnFilter(int column)
 void FundFilterProxy::clearAllFilters()
 {
     m_columnFilters.clear();
+    m_conditions.clear();
     m_searchText.clear();
     m_searchWords.clear();
     invalidateFilter();
@@ -76,6 +154,15 @@ bool FundFilterProxy::acceptsRow(int sourceRow, int ignoredColumn) const
         if (value.isEmpty())
             value = emptyValueLabel();
         if (!it.value().contains(value))
+            return false;
+    }
+
+    for (auto it = m_conditions.cbegin(); it != m_conditions.cend(); ++it) {
+        if (it.key() == ignoredColumn)
+            continue;
+        const QModelIndex index = model->index(sourceRow, it.key());
+        if (!it.value().matches(index.data(FundTableModel::SearchRole).toString(),
+                                index.data(FundTableModel::SortRole)))
             return false;
     }
 

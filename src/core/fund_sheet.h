@@ -1,12 +1,16 @@
 #pragma once
 
+#include <QHash>
+#include <QPair>
 #include <QString>
 #include <QStringList>
+#include <QRgb>
 #include <QVariant>
 #include <QVector>
 
 namespace bh::io {
 class XlsxWorkbook;
+using FontColors = QHash<QPair<int, int>, QRgb>;
 }
 
 namespace bh::core {
@@ -22,6 +26,7 @@ enum class ColumnRole {
     Year,
     Department,   // отдел / шифр
     Mark,         // пометки наличия
+    ColorMark,    // цвет шрифта строки (ветхие / устаревшие), добавляется программой
     Other,
 };
 
@@ -37,6 +42,7 @@ struct FundRecord
 {
     int excelRow = 0;
     QVector<QVariant> values;  // по порядку FundSheet::columns
+    QVector<QRgb> colors;      // цвет шрифта ячеек (0 — обычный); пусто, если цветов нет
 };
 
 struct FundSheet
@@ -64,6 +70,12 @@ public:
                               QString *error = nullptr);
 
     static ColumnRole roleForHeader(const QString &header);
+
+    // Раскрашивает ячейки по цветам шрифта из Excel и, если цветные строки
+    // есть, добавляет столбец «Цветовая пометка»: красный — «Ветхая»,
+    // синий — «Устаревшая», другие цвета — «Зелёный шрифт» и т. п.
+    // Цвет строки — цвет её ячеек; если цветов несколько — через запятую.
+    static void applyFontColors(FundSheet *sheet, const io::FontColors &colors);
 };
 
 // Строка для поиска и сравнения: нижний регистр, ё → е, одиночные пробелы.

@@ -4,6 +4,8 @@ add_library(bh_core STATIC
     core/fund_sheet.cpp
     core/work_copy.h
     core/work_copy.cpp
+    io/xlsx_font_colors.h
+    io/xlsx_font_colors.cpp
     io/xlsx_workbook.h
     io/xlsx_workbook.cpp
     models/fund_table_model.h
@@ -13,8 +15,8 @@ add_library(bh_core STATIC
 )
 target_include_directories(bh_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(bh_core
-    PUBLIC  Qt${QT_VERSION_MAJOR}::Core
-    PRIVATE OpenXLSX::OpenXLSX)
+    PUBLIC  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
+    PRIVATE OpenXLSX::OpenXLSX QXlsx::QXlsx)
 
 add_executable(BiblioHelper WIN32
     main.cpp
