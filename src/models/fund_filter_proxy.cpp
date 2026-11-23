@@ -181,6 +181,30 @@ bool FundFilterProxy::acceptsRow(int sourceRow, int ignoredColumn) const
     return true;
 }
 
+FundFilterProxy::Totals FundFilterProxy::totals(int priceColumn, int quantityColumn) const
+{
+    Totals result;
+    result.rows = rowCount();
+    if (priceColumn < 0)
+        return result;
+    for (int r = 0; r < result.rows; ++r) {
+        // SortRole — число для числовых ячеек и цен вида «44р10к», иначе текст.
+        const QVariant price = index(r, priceColumn).data(FundTableModel::SortRole);
+        if (price.type() != QVariant::Double) {
+            ++result.withoutPrice;
+            continue;
+        }
+        double quantity = 1;
+        if (quantityColumn >= 0) {
+            const QVariant q = index(r, quantityColumn).data(FundTableModel::SortRole);
+            if (q.type() == QVariant::Double && q.toDouble() > 0)
+                quantity = q.toDouble();
+        }
+        result.sum += price.toDouble() * quantity;
+    }
+    return result;
+}
+
 QVector<QPair<QString, int>> FundFilterProxy::columnValues(int column) const
 {
     QVector<QPair<QString, int>> result;

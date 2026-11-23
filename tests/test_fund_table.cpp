@@ -26,6 +26,8 @@ private slots:
     void fontColors();
     void conditions();
     void prices();
+    void totals_data();
+    void totals();
 
 private:
     static QString dataPath(const QString &name)
@@ -311,6 +313,44 @@ void FundTableTest::prices()
         }
     }
     QVERIFY(found);
+}
+
+void FundTableTest::totals_data()
+{
+    QTest::addColumn<QString>("file");
+    QTest::addColumn<double>("sum");
+    QTest::addColumn<int>("withoutPrice");
+
+    // Посчитано независимо (openpyxl): цена × кол-во, «10р50к» и «45к» — рубли,
+    // «б/ц», «нет» и пустые — без цены.
+    QTest::newRow("bogdanovka") << "fund_bogdanovka_2025.xlsx" << 349926.22 << 110;
+    QTest::newRow("bobrinka") << "fund_bobrinka.xlsx" << 1149242.79 << 702;
+}
+
+void FundTableTest::totals()
+{
+    QFETCH(QString, file);
+    QFETCH(double, sum);
+    QFETCH(int, withoutPrice);
+
+    bh::models::FundTableModel model;
+    model.setSheet(load(file));
+    bh::models::FundFilterProxy proxy;
+    proxy.setSourceModel(&model);
+    const int price = model.sheet().columnIndex(ColumnRole::Price);
+    const int quantity = model.sheet().columnIndex(ColumnRole::Quantity);
+
+    const auto all = proxy.totals(price, quantity);
+    QCOMPARE(all.rows, model.rowCount());
+    QVERIFY2(qAbs(all.sum - sum) < 0.005, qPrintable(QString::number(all.sum, 'f', 2)));
+    QCOMPARE(all.withoutPrice, withoutPrice);
+
+    // С поиском сумма только по найденным строкам.
+    proxy.setSearchText(QStringLiteral("пушкин"));
+    const auto found = proxy.totals(price, quantity);
+    QCOMPARE(found.rows, proxy.rowCount());
+    QVERIFY(found.rows > 0 && found.rows < all.rows);
+    QVERIFY(found.sum < all.sum);
 }
 
 QTEST_GUILESS_MAIN(FundTableTest)

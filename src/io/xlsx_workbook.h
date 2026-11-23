@@ -68,6 +68,16 @@ public:
     QVector<SheetRow> readRows(const QString &sheet, int firstRow, int lastRow, int columnCount,
                                QString *error = nullptr) const;
 
+    // Вставляет count пустых строк после afterRow с оформлением строки
+    // templateRow. Строки ниже (итоги) сдвигаются, итоговые формулы и
+    // автофильтр растягиваются на новые строки, Excel пересчитает формулы
+    // при открытии. Подробности — io/sheet_xml_rows.h.
+    bool appendRowsAfter(const QString &sheet, int afterRow, int count, int templateRow,
+                         QString *error = nullptr);
+
+    // Полностью заменить содержимое листа текстовой таблицей (служебный лист ID).
+    bool replaceSheetText(const QString &sheet, const QVector<QStringList> &rows, QString *error = nullptr);
+
     bool cellHasFormula(const QString &sheet, int row, int column) const;
     QString cellFormula(const QString &sheet, int row, int column) const;
 

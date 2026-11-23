@@ -2,7 +2,9 @@
 
 #include "main_window.h"
 
+#include "core/copy_ids.h"
 #include "core/fund_sheet.h"
+#include "record_dialog.h"
 #include "io/xlsx_font_colors.h"
 #include "filter_header_view.h"
 #include "filter_popup.h"
@@ -14,6 +16,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QApplication>
+#include <QLocale>
 #include <QScreen>
 #include <QStatusBar>
 #include <QTableView>
@@ -63,7 +66,135 @@ DocumentController::DocumentController(MainWindow *window)
     connect(window->booksHeader(), &FilterHeaderView::filterRequested, this,
             &DocumentController::showColumnFilter);
     connect(m_proxy, &models::FundFilterProxy::filtersChanged, this, &DocumentController::updateCounts);
+    connect(m_proxy, &QAbstractItemModel::rowsInserted, this, &DocumentController::updateCounts);
+    connect(m_proxy, &QAbstractItemModel::rowsRemoved, this, &DocumentController::updateCounts);
+    connect(window, &MainWindow::addBookRequested, this, &DocumentController::addBook);
+    connect(window, &MainWindow::editRequested, this, &DocumentController::editSelected);
+    connect(window, &MainWindow::undoRequested, this, &DocumentController::undo);
+    connect(window->booksTable(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
+        editRow(m_proxy->mapToSource(index).row());
+    });
+    connect(m_model, &models::FundTableModel::modifiedChanged, this, [this](bool modified) {
+        m_window->setUnsavedChanges(modified);
+        m_window->setUndoText(m_model->undoText());
+    });
+    // Изменённые данные могут выпасть из фильтра: прокси пересчитывает строку сама.
+    m_proxy->setDynamicSortFilter(true);
     connect(m_proxy, &QAbstractItemModel::modelReset, this, &DocumentController::updateCounts);
+    // Правка цены меняет сумму.
+    connect(m_model, &QAbstractItemModel::dataChanged, this, &DocumentController::updateCounts);
+}
+
+QString DocumentController::duplicateInventoryText(const QString &inventory, const QString &exceptId) const
+{
+    const int inv = m_model->sheet().columnIndex(core::ColumnRole::Inventory);
+    const int author = m_model->sheet().columnIndex(core::ColumnRole::AuthorTitle);
+    bool isNumber = false;
+    inventory.toLongLong(&isNumber);
+    if (inv < 0 || !isNumber)  // «б/н», «бр» повторяются у многих — не предупреждаем
+        return {};
+    QStringList same;
+    for (int r = 0; r < m_model->rowCount() && same.size() < 3; ++r) {
+        const QModelIndex index = m_model->index(r, inv);
+        if (index.data().toString() == inventory && index.data(models::FundTableModel::IdRole).toString() != exceptId)
+            same << QStringLiteral("«%1» (строка %2)")
+                        .arg(author >= 0 ? m_model->index(r, author).data().toString().left(50) : QString())
+                        .arg(index.data(models::FundTableModel::ExcelRowRole).toInt());
+    }
+    if (same.isEmpty())
+        return {};
+    return QStringLiteral("Такой инвентарный номер уже есть: %1. Сохранить всё равно можно.")
+        .arg(same.join(QStringLiteral(", ")));
+}
+
+void DocumentController::selectRecord(const QString &id)
+{
+    const int row = m_model->rowForId(id);
+    if (row < 0)
+        return;
+    const QModelIndex proxyIndex = m_proxy->mapFromSource(m_model->index(row, 0));
+    QTableView *table = m_window->booksTable();
+    if (!proxyIndex.isValid()) {
+        m_window->statusBar()->showMessage(
+            QStringLiteral("Книга сохранена, но сейчас скрыта поиском или фильтром. «Сбросить фильтры» покажет её."),
+            10000);
+        return;
+    }
+    table->selectRow(proxyIndex.row());
+    table->scrollTo(proxyIndex, QAbstractItemView::PositionAtCenter);
+}
+
+void DocumentController::addBook()
+{
+    if (!m_workbook.isOpen() || m_model->columnCount() == 0)
+        return;
+    const core::FundSheet &sheet = m_model->sheet();
+    QVector<QVariant> values(sheet.columns.size());
+    // Номер по порядку — следующий после самого большого; количество — 1.
+    const int number = sheet.columnIndex(core::ColumnRole::Number);
+    if (number >= 0) {
+        qlonglong max = 0;
+        for (const auto &record : sheet.records)
+            max = std::max(max, record.values.at(number).toLongLong());
+        values[number] = max + 1;
+    }
+    const int quantity = sheet.columnIndex(core::ColumnRole::Quantity);
+    if (quantity >= 0)
+        values[quantity] = 1;
+
+    RecordDialog dialog(sheet, values, 0, m_window);
+    dialog.setDuplicateCheck([this](const QString &inv) { return duplicateInventoryText(inv, {}); });
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const int row = m_model->addRecord(dialog.values());
+    m_window->setUndoText(m_model->undoText());
+    selectRecord(m_model->index(row, 0).data(models::FundTableModel::IdRole).toString());
+    m_window->statusBar()->showMessage(QStringLiteral("Книга добавлена. Нажмите «Сохранить», чтобы записать её в Excel."), 10000);
+}
+
+void DocumentController::editSelected()
+{
+    QTableView *table = m_window->booksTable();
+    const QModelIndexList rows = table->selectionModel() ? table->selectionModel()->selectedRows()
+                                                         : QModelIndexList();
+    if (rows.size() != 1) {
+        QMessageBox::information(m_window, QStringLiteral("Редактировать"),
+                                 rows.isEmpty() ? QStringLiteral("Сначала щёлкните по строке с книгой, которую нужно изменить.")
+                                                : QStringLiteral("Выбрано несколько строк. Выберите одну книгу."));
+        return;
+    }
+    editRow(m_proxy->mapToSource(rows.first()).row());
+}
+
+void DocumentController::editRow(int modelRow)
+{
+    if (modelRow < 0 || modelRow >= m_model->rowCount())
+        return;
+    // Диалог работает с копией и ID, а не с номером строки: сортировка и
+    // фильтры, пока он открыт, не могут подменить книгу.
+    const QString id = m_model->index(modelRow, 0).data(models::FundTableModel::IdRole).toString();
+    const core::FundRecord record = m_model->sheet().records.at(modelRow);
+    RecordDialog dialog(m_model->sheet(), record.values, record.excelRow, m_window);
+    dialog.setDuplicateCheck([this, id](const QString &inv) { return duplicateInventoryText(inv, id); });
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const int row = m_model->rowForId(id);
+    if (row < 0)
+        return;
+    if (m_model->updateRecord(row, dialog.values())) {
+        m_window->setUndoText(m_model->undoText());
+        selectRecord(id);
+        m_window->statusBar()->showMessage(QStringLiteral("Изменения внесены. Нажмите «Сохранить», чтобы записать их в Excel."), 10000);
+    }
+}
+
+void DocumentController::undo()
+{
+    if (!m_model->canUndo())
+        return;
+    m_model->undo();
+    m_window->setUndoText(m_model->undoText());
+    m_window->statusBar()->showMessage(QStringLiteral("Последнее изменение отменено"), 5000);
 }
 
 void DocumentController::updateCounts()
@@ -74,7 +205,21 @@ void DocumentController::updateCounts()
             filtered << c;
     }
     m_window->booksHeader()->setFilteredColumns(filtered);
-    m_window->setRecordCount(m_proxy->rowCount(), m_model->rowCount(), m_proxy->hasAnyFilter());
+    m_window->setRecordCount(m_proxy->rowCount(), m_model->rowCount(), m_proxy->hasAnyFilter(), sumText());
+}
+
+QString DocumentController::sumText() const
+{
+    const core::FundSheet &sheet = m_model->sheet();
+    const int price = sheet.columnIndex(core::ColumnRole::Price);
+    if (price < 0)
+        return {};
+    const auto totals = m_proxy->totals(price, sheet.columnIndex(core::ColumnRole::Quantity));
+    QString text = QStringLiteral("на сумму %1 руб.")
+                       .arg(QLocale(QLocale::Russian).toString(totals.sum, 'f', 2));
+    if (totals.withoutPrice > 0)
+        text += QStringLiteral(" (без цены: %1)").arg(totals.withoutPrice);
+    return text;
 }
 
 void DocumentController::showColumnFilter(int column, const QPoint &globalPos)
@@ -181,6 +326,8 @@ bool DocumentController::openFile(const QString &path)
     if (read) {
         // Цвет шрифта (ветхие / устаревшие) — отдельным чтением, только для показа.
         core::FundSheetReader::applyFontColors(&sheet, io::readFontColors(workPath, sheet.sheetName));
+        // Внутренние ID экземпляров: из скрытого листа или новые.
+        core::CopyIds::assign(&sheet, core::CopyIds::load(m_workbook));
     }
     QApplication::restoreOverrideCursor();
 
@@ -242,11 +389,15 @@ void DocumentController::save()
     if (!m_workbook.isOpen())
         return;
     QString error;
-    if (!m_workbook.saveAs(m_workPath, &error)) {
-        showError(QStringLiteral("Не удалось сохранить"), error);
+    if (!m_model->writeChanges(m_workbook, &error) || !m_workbook.saveAs(m_workPath, &error)) {
+        showError(QStringLiteral("Не удалось сохранить"),
+                  QStringLiteral("%1\n\nЕсли файл открыт в Excel, закройте его и нажмите «Сохранить» ещё раз.")
+                      .arg(error));
         return;
     }
+    m_model->markSaved();
     m_window->setUnsavedChanges(false);
+    m_window->setUndoText({});
     m_window->statusBar()->showMessage(QStringLiteral("Изменения сохранены в рабочую копию"), 5000);
 }
 
@@ -273,10 +424,12 @@ void DocumentController::saveAs()
     }
 
     QString error;
-    if (!m_workbook.saveAs(path, &error)) {
+    if (!m_model->writeChanges(m_workbook, &error) || !m_workbook.saveAs(path, &error)) {
         showError(QStringLiteral("Не удалось сохранить"), error);
         return;
     }
+    m_model->markSaved();
+    m_window->setUndoText({});
     settings.setValue(kLastDirKey, QFileInfo(path).absolutePath());
     // Дальше программа работает с новым файлом.
     m_workPath = path;

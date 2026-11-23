@@ -1,11 +1,15 @@
 # Библиотека с логикой и работой с файлами: её же подключают автотесты.
 add_library(bh_core STATIC
+    core/copy_ids.h
+    core/copy_ids.cpp
     core/fund_sheet.h
     core/fund_sheet.cpp
     core/work_copy.h
     core/work_copy.cpp
     io/xlsx_font_colors.h
     io/xlsx_font_colors.cpp
+    io/sheet_xml_rows.h
+    io/sheet_xml_rows.cpp
     io/xlsx_workbook.h
     io/xlsx_workbook.cpp
     models/fund_table_model.h
@@ -17,6 +21,12 @@ target_include_directories(bh_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(bh_core
     PUBLIC  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
     PRIVATE OpenXLSX::OpenXLSX QXlsx::QXlsx)
+# pugixml (внутри OpenXLSX) — для правки XML листа при добавлении строк.
+if(TARGET pugixml-static)
+    target_link_libraries(bh_core PRIVATE pugixml-static)
+elseif(TARGET pugixml::pugixml)
+    target_link_libraries(bh_core PRIVATE pugixml::pugixml)
+endif()
 
 add_executable(BiblioHelper WIN32
     main.cpp
@@ -26,6 +36,8 @@ add_executable(BiblioHelper WIN32
     ui/filter_header_view.cpp
     ui/filter_popup.h
     ui/filter_popup.cpp
+    ui/record_dialog.h
+    ui/record_dialog.cpp
     ui/main_window.h
     ui/main_window.cpp
     resources/resources.qrc

@@ -104,6 +104,34 @@ QString displayText(const QVariant &value)
     }
 }
 
+QVariant valueFromInput(const QString &input, ColumnRole role, const QVariant &previous)
+{
+    const QString text = input.trimmed();
+    if (text.isEmpty())
+        return {};
+    const bool wasNumber = previous.type() == QVariant::Double || previous.type() == QVariant::LongLong
+        || previous.type() == QVariant::Int;
+    const bool numericColumn = role == ColumnRole::Number || role == ColumnRole::Inventory
+        || role == ColumnRole::Quantity || role == ColumnRole::Price || role == ColumnRole::Year;
+    // Шифр отдела «63,3» — не число, а «84» — число, как в файлах.
+    const bool integersOnly = role == ColumnRole::Department;
+    if (!wasNumber && !numericColumn && !integersOnly)
+        return text;
+
+    bool ok = false;
+    const qlonglong integer = text.toLongLong(&ok);
+    if (ok)
+        return integer;
+    if (integersOnly && !wasNumber)
+        return text;
+    QString decimal = text;
+    decimal.replace(QLatin1Char(','), QLatin1Char('.'));
+    const double d = decimal.toDouble(&ok);
+    if (ok && !decimal.contains(QLatin1Char(' ')))
+        return d;
+    return text;
+}
+
 ColumnRole FundSheetReader::roleForHeader(const QString &header)
 {
     const QString h = normalizeForSearch(header);
