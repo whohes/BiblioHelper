@@ -16,6 +16,9 @@
 
 #include <private/qzipreader_p.h>
 
+#include <cstdio>
+#include <exception>
+
 namespace {
 
 QByteArray sha256(const QString &path)
@@ -245,5 +248,29 @@ void XlsxRoundtripTest::cyrillicPath()
     QVERIFY(QFile::exists(saved));
 }
 
-QTEST_GUILESS_MAIN(XlsxRoundtripTest)
+// Свой main вместо QTEST_GUILESS_MAIN: если тест аварийно завершится
+// (std::terminate), вывод не потеряется в буфере и будет видна причина.
+int main(int argc, char *argv[])
+{
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::set_terminate([] {
+        std::fprintf(stderr, "std::terminate: ");
+        try {
+            if (auto e = std::current_exception())
+                std::rethrow_exception(e);
+            std::fprintf(stderr, "без исключения\n");
+        } catch (const std::exception &e) {
+            std::fprintf(stderr, "%s\n", e.what());
+        } catch (...) {
+            std::fprintf(stderr, "неизвестное исключение\n");
+        }
+        std::fflush(stderr);
+        std::abort();
+    });
+
+    QCoreApplication app(argc, argv);
+    XlsxRoundtripTest test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    return QTest::qExec(&test, argc, argv);
+}
 #include "test_xlsx_roundtrip.moc"
