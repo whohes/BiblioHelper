@@ -386,6 +386,45 @@ bool XlsxWorkbook::setColumnWidth(const QString &sheet, int column, double width
     }
 }
 
+bool XlsxWorkbook::archiveRows(const QString &sheet, const QVector<int> &rows, int headerRow,
+                               const QString &archiveSheet, QString *error)
+{
+    if (!isOpen()) {
+        setError(error, QStringLiteral("Файл не открыт"));
+        return false;
+    }
+    if (rows.isEmpty())
+        return true;
+    try {
+        auto wb = m_doc->workbook();
+        const std::string archiveName = toUtf8(archiveSheet);
+        const bool created = !wb.sheetExists(archiveName);
+        if (created)
+            wb.addWorksheet(archiveName);
+        auto source = wb.worksheet(toUtf8(sheet));
+        auto archive = wb.worksheet(archiveName);
+        pugi::xml_node from = XmlAccess::of(source).document_element();
+        pugi::xml_node to = XmlAccess::of(archive).document_element();
+        int next = sheetxml::lastRowNumber(to) + 1;
+        if (created) {
+            sheetxml::copyColumnWidths(from, to);
+            sheetxml::copyRows(from, to, {headerRow}, 1);
+            next = 2;
+        }
+        QVector<int> sorted = rows;
+        std::sort(sorted.begin(), sorted.end());
+        sheetxml::copyRows(from, to, sorted, next);
+        sheetxml::deleteRows(from, sorted);
+        auto wbDoc = XmlAccess::of(wb).document_element();
+        sheetxml::deleteRowsInDefinedNames(wbDoc, sheet, sorted);
+        sheetxml::requestFullCalcOnLoad(wbDoc);
+        return true;
+    } catch (const std::exception &e) {
+        setError(error, QStringLiteral("Не удалось перенести строки в архив: %1").arg(fromUtf8(e.what())));
+        return false;
+    }
+}
+
 bool XlsxWorkbook::setReportLayout(const QString &sheet, int headerRow, const QString &filterRef, QString *error)
 {
     if (!isOpen()) {

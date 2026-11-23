@@ -4,6 +4,8 @@ add_library(bh_core STATIC
     core/copy_ids.cpp
     core/fund_sheet.h
     core/fund_sheet.cpp
+    core/withdrawal_archive.h
+    core/withdrawal_archive.cpp
     core/withdrawal_report.h
     core/withdrawal_report.cpp
     core/work_copy.h

@@ -3,6 +3,7 @@
 
 #include "core/copy_ids.h"
 #include "core/fund_sheet.h"
+#include "core/withdrawal_archive.h"
 #include "core/withdrawal_report.h"
 #include "io/xlsx_workbook.h"
 #include "models/fund_filter_proxy.h"
@@ -33,6 +34,7 @@ private slots:
     void withdrawUndoRestore();
     void withdrawWriteAndReopen();
     void report();
+    void archive();
 
 private:
     static QString dataPath(const QString &name)
@@ -484,6 +486,96 @@ void EditingTest::report()
     QCOMPARE(wb.cellValue(s, 8, 2).toString(), QStringLiteral("Итого: 3 экз."));
     QVERIFY(qAbs(wb.cellValue(s, 8, 4).toDouble() - expected) < 1e-6);
     QVERIFY(wb.cellValue(s, 9, 2).toString().isEmpty());
+}
+
+void EditingTest::archive()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString work = tmp.filePath(QStringLiteral("work.xlsx"));
+    const QString saved = tmp.filePath(QStringLiteral("saved.xlsx"));
+    const QString cleaned = tmp.filePath(QStringLiteral("cleaned.xlsx"));
+    QVERIFY(QFile::copy(dataPath(QStringLiteral("fund_bobrinka.xlsx")), work));
+
+    // Строки Excel: 10 (обычная), 2254 (на неё ссылается G24: =$G$2254), 8245 (последняя, в =SUM).
+    const QVector<int> excelRows{10, 2254, 8245};
+    QStringList titles;
+    QString cachedG24;
+    int count = 0;
+    {
+        XlsxWorkbook wb;
+        FundSheet sheet;
+        QVERIFY(openSheet(wb, work, &sheet));
+        CopyIds::assign(&sheet, {});
+        count = sheet.records.size();
+        QCOMPARE(wb.cellFormula(sheet.sheetName, 24, 7), QStringLiteral("$G$2254"));
+        QCOMPARE(wb.cellFormula(sheet.sheetName, 8246, 4), QStringLiteral("SUM(D3:D8245)"));
+        cachedG24 = bh::core::displayText(wb.cellValue(sheet.sheetName, 24, 7));
+        bh::models::FundTableModel model;
+        model.setSheet(sheet);
+        QVector<int> rows;
+        for (int i = 0; i < sheet.records.size(); ++i) {
+            if (excelRows.contains(sheet.records.at(i).excelRow)) {
+                rows << i;
+                titles << bh::core::displayText(sheet.records.at(i).values.at(sheet.columnIndex(ColumnRole::AuthorTitle)));
+            }
+        }
+        QCOMPARE(rows.size(), 3);
+        QCOMPARE(model.withdraw(rows, QDate(2026, 11, 23), QStringLiteral("ветхость"), {}), 3);
+        QString error;
+        QVERIFY2(model.writeChanges(wb, &error), qPrintable(error));
+        QVERIFY2(wb.saveAs(saved, &error), qPrintable(error));
+    }
+
+    QStringList ids;
+    {
+        XlsxWorkbook wb;
+        FundSheet sheet;
+        QVERIFY(openSheet(wb, saved, &sheet));
+        CopyIds::assign(&sheet, CopyIds::load(wb));
+        QVector<int> withdrawn;
+        for (int i = 0; i < sheet.records.size(); ++i) {
+            if (sheet.isWithdrawn(i))
+                withdrawn << i;
+            else if (ids.size() < 20)
+                ids << sheet.records.at(i).id;
+        }
+        QCOMPARE(withdrawn.size(), 3);
+        QString error;
+        QCOMPARE(bh::core::WithdrawalArchive::archive(wb, &sheet, withdrawn, &error), 3);
+        QCOMPARE(sheet.records.size(), count - 3);
+        QVERIFY2(wb.saveAs(cleaned, &error), qPrintable(error));
+    }
+
+    XlsxWorkbook wb;
+    FundSheet sheet;
+    QVERIFY(openSheet(wb, cleaned, &sheet));
+    QCOMPARE(sheet.sheetName, QStringLiteral("Лист1"));  // архив не считается фондом
+    QCOMPARE(sheet.records.size(), count - 3);
+    QCOMPARE(CopyIds::assign(&sheet, CopyIds::load(wb)), 0);
+    for (int i = 0; i < ids.size(); ++i)
+        QCOMPARE(sheet.records.at(i).id, ids.at(i));
+    for (int i = 0; i < sheet.records.size(); ++i)
+        QVERIFY(!sheet.isWithdrawn(i));
+
+    const QString s = sheet.sheetName;
+    // Итог сжался на 3 строки и уехал вверх.
+    QCOMPARE(wb.cellFormula(s, 8243, 4), QStringLiteral("SUM(D3:D8242)"));
+    // G24 → G23: ссылался на удалённую строку — стал значением.
+    QVERIFY(!wb.cellHasFormula(s, 23, 7));
+    QCOMPARE(bh::core::displayText(wb.cellValue(s, 23, 7)), cachedG24);
+    // G27 (=$G$2250) → G26 и =$G$2248 (удалены 10 и 2254 → минус одна строка выше 2250).
+    QCOMPARE(wb.cellFormula(s, 26, 7), QStringLiteral("$G$2249"));
+
+    // Архив: заголовок и три строки по порядку, со статусом.
+    QVERIFY(wb.sheetNames().contains(bh::core::archiveSheetName()));
+    const QString a = bh::core::archiveSheetName();
+    QCOMPARE(bh::core::displayText(wb.cellValue(a, 1, 2)), QStringLiteral("автор книги и название"));
+    for (int i = 0; i < 3; ++i)
+        QCOMPARE(bh::core::displayText(wb.cellValue(a, 2 + i, 2)), titles.at(i));
+    const int statusCol = sheet.columns.at(sheet.columnIndex(ColumnRole::Status)).excelColumn;
+    QCOMPARE(wb.cellValue(a, 2, statusCol).toString(), QStringLiteral("Выбыло 23.11.2026, ветхость"));
+    QVERIFY(wb.cellValue(a, 5, 2).toString().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(EditingTest)
