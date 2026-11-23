@@ -28,6 +28,10 @@ public:
         QString sheet;
         int row = 0;
         QString fingerprint;
+        // Выбытие: дата (ГГГГ-ММ-ДД), причина, примечание. Пусто — экземпляр в фонде.
+        QString withdrawnOn;
+        QString reason;
+        QString note;
     };
 
     static QVector<Entry> load(const io::XlsxWorkbook &workbook);
@@ -36,6 +40,7 @@ public:
     // Сопоставляет ID записям: по строке с тем же отпечатком, затем по
     // отпечатку (строки сдвинули в Excel), затем по строке (ячейку поправили).
     // Остальным — новые ID. Возвращает число новых.
+    // Вместе с ID экземпляр получает сведения о выбытии.
     static int assign(FundSheet *sheet, const QVector<Entry> &entries);
 
     static QString fingerprint(const FundSheet &sheet, const FundRecord &record);

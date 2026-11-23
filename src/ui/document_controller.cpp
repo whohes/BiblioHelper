@@ -4,12 +4,17 @@
 
 #include "core/copy_ids.h"
 #include "core/fund_sheet.h"
+#include "core/withdrawal_report.h"
+#include "fund_table_page.h"
 #include "record_dialog.h"
+#include "withdraw_dialog.h"
 #include "io/xlsx_font_colors.h"
 #include "filter_header_view.h"
 #include "filter_popup.h"
 
+#include <QDesktopServices>
 #include <QDir>
+#include <QUrl>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMessageBox>
@@ -43,8 +48,12 @@ DocumentController::DocumentController(MainWindow *window)
     , m_window(window)
     , m_model(new models::FundTableModel(this))
     , m_proxy(new models::FundFilterProxy(this))
+    , m_withdrawnProxy(new models::FundFilterProxy(this))
 {
     m_proxy->setSourceModel(m_model);
+    m_proxy->setStatusFilter(models::FundFilterProxy::StatusFilter::Active);
+    m_withdrawnProxy->setSourceModel(m_model);
+    m_withdrawnProxy->setStatusFilter(models::FundFilterProxy::StatusFilter::Withdrawn);
 
     connect(window, &MainWindow::openRequested, this, &DocumentController::open);
     connect(window, &MainWindow::saveRequested, this, &DocumentController::save);
@@ -56,32 +65,57 @@ DocumentController::DocumentController(MainWindow *window)
         m_pendingSearch = text;
         m_searchTimer.start();
     });
-    connect(&m_searchTimer, &QTimer::timeout, this, [this] { m_proxy->setSearchText(m_pendingSearch); });
+    connect(&m_searchTimer, &QTimer::timeout, this, [this] {
+        m_proxy->setSearchText(m_pendingSearch);
+        m_withdrawnProxy->setSearchText(m_pendingSearch);
+    });
     connect(window, &MainWindow::resetFiltersRequested, this, [this] {
         m_searchTimer.stop();
+        for (FundTablePage *page : {m_window->booksPage(), m_window->withdrawnPage()}) {
+            page->table()->sortByColumn(-1, Qt::AscendingOrder);
+            page->header()->setSortIndicator(-1, Qt::AscendingOrder);
+        }
         m_proxy->clearAllFilters();
-        m_window->booksTable()->sortByColumn(-1, Qt::AscendingOrder);
-        m_window->booksHeader()->setSortIndicator(-1, Qt::AscendingOrder);
+        m_withdrawnProxy->clearAllFilters();
     });
-    connect(window->booksHeader(), &FilterHeaderView::filterRequested, this,
-            &DocumentController::showColumnFilter);
-    connect(m_proxy, &models::FundFilterProxy::filtersChanged, this, &DocumentController::updateCounts);
-    connect(m_proxy, &QAbstractItemModel::rowsInserted, this, &DocumentController::updateCounts);
-    connect(m_proxy, &QAbstractItemModel::rowsRemoved, this, &DocumentController::updateCounts);
+
+    const QVector<QPair<FundTablePage *, models::FundFilterProxy *>> views{
+        {window->booksPage(), m_proxy}, {window->withdrawnPage(), m_withdrawnProxy}};
+    for (const auto &view : views) {
+        FundTablePage *page = view.first;
+        models::FundFilterProxy *proxy = view.second;
+        connect(page->header(), &FilterHeaderView::filterRequested, this,
+                [this, page, proxy](int column, const QPoint &pos) { showColumnFilter(page, proxy, column, pos); });
+        connect(proxy, &models::FundFilterProxy::filtersChanged, this, &DocumentController::updateCounts);
+        connect(proxy, &QAbstractItemModel::rowsInserted, this, &DocumentController::updateCounts);
+        connect(proxy, &QAbstractItemModel::rowsRemoved, this, &DocumentController::updateCounts);
+        connect(proxy, &QAbstractItemModel::modelReset, this, &DocumentController::updateCounts);
+        // Изменённые данные могут выпасть из фильтра: прокси пересчитывает строку сама.
+        proxy->setDynamicSortFilter(true);
+        connect(page->table(), &QAbstractItemView::doubleClicked, this, [this, proxy](const QModelIndex &index) {
+            editRow(proxy->mapToSource(index).row());
+        });
+    }
+
     connect(window, &MainWindow::addBookRequested, this, &DocumentController::addBook);
     connect(window, &MainWindow::editRequested, this, &DocumentController::editSelected);
     connect(window, &MainWindow::undoRequested, this, &DocumentController::undo);
-    connect(window->booksTable(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
-        editRow(m_proxy->mapToSource(index).row());
+    connect(window, &MainWindow::withdrawRequested, this, &DocumentController::withdrawSelected);
+    connect(window, &MainWindow::restoreRequested, this, &DocumentController::restoreSelected);
+    connect(window, &MainWindow::reportRequested, this, &DocumentController::createReport);
+    // Ширину столбцов «Выбывших» подбираем, когда вкладка видна: до этого у таблицы нет размера.
+    connect(window, &MainWindow::withdrawnTabShown, this, [this] {
+        if (m_fitWithdrawnPending && m_window->withdrawnPage()->isTableShown()) {
+            m_fitWithdrawnPending = false;
+            fitColumns(m_window->withdrawnPage()->table());
+        }
     });
     connect(m_model, &models::FundTableModel::modifiedChanged, this, [this](bool modified) {
         m_window->setUnsavedChanges(modified);
-        m_window->setUndoText(m_model->undoText());
     });
-    // Изменённые данные могут выпасть из фильтра: прокси пересчитывает строку сама.
-    m_proxy->setDynamicSortFilter(true);
-    connect(m_proxy, &QAbstractItemModel::modelReset, this, &DocumentController::updateCounts);
-    // Правка цены меняет сумму.
+    connect(m_model, &models::FundTableModel::undoChanged, this,
+            [this] { m_window->setUndoText(m_model->undoText()); });
+    // Правка цены или выбытие меняют сумму.
     connect(m_model, &QAbstractItemModel::dataChanged, this, &DocumentController::updateCounts);
 }
 
@@ -147,23 +181,35 @@ void DocumentController::addBook()
     if (dialog.exec() != QDialog::Accepted)
         return;
     const int row = m_model->addRecord(dialog.values());
-    m_window->setUndoText(m_model->undoText());
     selectRecord(m_model->index(row, 0).data(models::FundTableModel::IdRole).toString());
     m_window->statusBar()->showMessage(QStringLiteral("Книга добавлена. Нажмите «Сохранить», чтобы записать её в Excel."), 10000);
 }
 
+QVector<int> DocumentController::selectedModelRows(QTableView *table, models::FundFilterProxy *proxy) const
+{
+    QVector<int> result;
+    if (!table->selectionModel())
+        return result;
+    QModelIndexList rows = table->selectionModel()->selectedRows();
+    std::sort(rows.begin(), rows.end(), [](const QModelIndex &a, const QModelIndex &b) { return a.row() < b.row(); });
+    for (const QModelIndex &index : qAsConst(rows))
+        result.push_back(proxy->mapToSource(index).row());
+    return result;
+}
+
 void DocumentController::editSelected()
 {
-    QTableView *table = m_window->booksTable();
-    const QModelIndexList rows = table->selectionModel() ? table->selectionModel()->selectedRows()
-                                                         : QModelIndexList();
+    const bool withdrawnTab = m_window->isWithdrawnTabActive();
+    QTableView *table = withdrawnTab ? m_window->withdrawnPage()->table() : m_window->booksTable();
+    models::FundFilterProxy *proxy = withdrawnTab ? m_withdrawnProxy : m_proxy;
+    const QVector<int> rows = selectedModelRows(table, proxy);
     if (rows.size() != 1) {
         QMessageBox::information(m_window, QStringLiteral("Редактировать"),
                                  rows.isEmpty() ? QStringLiteral("Сначала щёлкните по строке с книгой, которую нужно изменить.")
                                                 : QStringLiteral("Выбрано несколько строк. Выберите одну книгу."));
         return;
     }
-    editRow(m_proxy->mapToSource(rows.first()).row());
+    editRow(rows.first());
 }
 
 void DocumentController::editRow(int modelRow)
@@ -182,8 +228,8 @@ void DocumentController::editRow(int modelRow)
     if (row < 0)
         return;
     if (m_model->updateRecord(row, dialog.values())) {
-        m_window->setUndoText(m_model->undoText());
-        selectRecord(id);
+        if (!m_model->isWithdrawn(row))
+            selectRecord(id);
         m_window->statusBar()->showMessage(QStringLiteral("Изменения внесены. Нажмите «Сохранить», чтобы записать их в Excel."), 10000);
     }
 }
@@ -193,47 +239,196 @@ void DocumentController::undo()
     if (!m_model->canUndo())
         return;
     m_model->undo();
-    m_window->setUndoText(m_model->undoText());
     m_window->statusBar()->showMessage(QStringLiteral("Последнее изменение отменено"), 5000);
+}
+
+QString DocumentController::countText(models::FundFilterProxy *proxy, bool withdrawn) const
+{
+    const core::FundSheet &sheet = m_model->sheet();
+    const int price = sheet.columnIndex(core::ColumnRole::Price);
+    const auto totals = proxy->totals(price, sheet.columnIndex(core::ColumnRole::Quantity));
+    int total = 0;
+    for (int r = 0; r < m_model->rowCount(); ++r)
+        total += m_model->isWithdrawn(r) == withdrawn ? 1 : 0;
+
+    QString sum;
+    if (price >= 0) {
+        sum = QStringLiteral(" на сумму %1 руб.").arg(QLocale(QLocale::Russian).toString(totals.sum, 'f', 2));
+        if (totals.withoutPrice > 0)
+            sum += QStringLiteral(" (без цены: %1)").arg(totals.withoutPrice);
+    }
+    const QString what = withdrawn ? QStringLiteral("выбывших экземпляров") : QStringLiteral("экземпляров");
+    if (proxy->hasAnyFilter())
+        return QStringLiteral("Показано %1 из %2 %3%4. Включены поиск или фильтры — «Сбросить фильтры» покажет все.")
+            .arg(totals.rows).arg(total).arg(what, sum);
+    if (withdrawn && total == 0)
+        return QStringLiteral("Выбывших экземпляров нет. Выбытие оформляется кнопкой «Выбытие» на вкладке «Книги».");
+    return QStringLiteral("Всего %1: %2%3").arg(what).arg(total).arg(sum);
 }
 
 void DocumentController::updateCounts()
 {
-    QList<int> filtered;
-    for (int c = 0; c < m_model->columnCount(); ++c) {
-        if (m_proxy->isColumnFiltered(c))
-            filtered << c;
+    const QVector<QPair<FundTablePage *, models::FundFilterProxy *>> views{
+        {m_window->booksPage(), m_proxy}, {m_window->withdrawnPage(), m_withdrawnProxy}};
+    for (const auto &view : views) {
+        QList<int> filtered;
+        for (int c = 0; c < m_model->columnCount(); ++c) {
+            if (view.second->isColumnFiltered(c))
+                filtered << c;
+        }
+        view.first->header()->setFilteredColumns(filtered);
+        view.first->setCountText(countText(view.second, view.second == m_withdrawnProxy),
+                                 view.second->hasAnyFilter());
     }
-    m_window->booksHeader()->setFilteredColumns(filtered);
-    m_window->setRecordCount(m_proxy->rowCount(), m_model->rowCount(), m_proxy->hasAnyFilter(), sumText());
 }
 
-QString DocumentController::sumText() const
+void DocumentController::updateColumnVisibility()
 {
+    using core::ColumnRole;
     const core::FundSheet &sheet = m_model->sheet();
-    const int price = sheet.columnIndex(core::ColumnRole::Price);
-    if (price < 0)
-        return {};
-    const auto totals = m_proxy->totals(price, sheet.columnIndex(core::ColumnRole::Quantity));
-    QString text = QStringLiteral("на сумму %1 руб.")
-                       .arg(QLocale(QLocale::Russian).toString(totals.sum, 'f', 2));
-    if (totals.withoutPrice > 0)
-        text += QStringLiteral(" (без цены: %1)").arg(totals.withoutPrice);
-    return text;
+    QTableView *books = m_window->booksTable();
+    QTableView *withdrawn = m_window->withdrawnPage()->table();
+    for (int c = 0; c < sheet.columns.size(); ++c) {
+        const ColumnRole role = sheet.columns.at(c).role;
+        const bool withdrawalInfo = role == ColumnRole::WithdrawDate || role == ColumnRole::WithdrawReason
+            || role == ColumnRole::WithdrawNote;
+        // «Статус» дублирует дату и причину — он только для Excel.
+        books->setColumnHidden(c, withdrawalInfo || role == ColumnRole::Status);
+        withdrawn->setColumnHidden(c, role == ColumnRole::Status || role == ColumnRole::Quantity
+                                          || role == ColumnRole::Mark);
+    }
+    // «Выбывшие»: дата, причина и примечание сразу после инв. номера, как в отчёте.
+    QHeaderView *header = withdrawn->horizontalHeader();
+    int after = header->visualIndex(std::max(sheet.columnIndex(ColumnRole::Inventory),
+                                             sheet.columnIndex(ColumnRole::AuthorTitle)));
+    for (ColumnRole role : {ColumnRole::WithdrawDate, ColumnRole::WithdrawReason, ColumnRole::WithdrawNote}) {
+        const int c = sheet.columnIndex(role);
+        if (c < 0 || after < 0)
+            continue;
+        header->moveSection(header->visualIndex(c), ++after);
+    }
 }
 
-void DocumentController::showColumnFilter(int column, const QPoint &globalPos)
+void DocumentController::withdrawSelected()
+{
+    if (!m_workbook.isOpen() || m_model->columnCount() == 0)
+        return;
+    if (m_window->isWithdrawnTabActive()) {
+        QMessageBox::information(m_window, QStringLiteral("Выбытие"),
+                                 QStringLiteral("Выбытие оформляется на вкладке «Книги»: выделите там экземпляры "
+                                                "и нажмите «Выбытие».\n\nЧтобы вернуть экземпляр в фонд, выберите его "
+                                                "здесь и нажмите «Вернуть в фонд»."));
+        return;
+    }
+    const QVector<int> rows = selectedModelRows(m_window->booksTable(), m_proxy);
+    if (rows.isEmpty()) {
+        QMessageBox::information(m_window, QStringLiteral("Выбытие"),
+                                 QStringLiteral("Сначала выделите в списке экземпляры, которые выбывают.\n\n"
+                                                "Несколько строк — щелчками с нажатой клавишей Ctrl, "
+                                                "подряд — с клавишей Shift."));
+        return;
+    }
+    WithdrawDialog dialog(m_model->sheet(), rows, m_window);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const int count = m_model->withdraw(rows, dialog.date(), dialog.reason(), dialog.note());
+    m_window->booksTable()->clearSelection();
+    m_window->statusBar()->showMessage(
+        QStringLiteral("Оформлено выбытие %1 экз. Они на вкладке «Выбывшие». "
+                       "Нажмите «Сохранить», чтобы записать изменения в Excel.").arg(count),
+        12000);
+}
+
+void DocumentController::restoreSelected()
+{
+    QTableView *table = m_window->withdrawnPage()->table();
+    const QVector<int> rows = selectedModelRows(table, m_withdrawnProxy);
+    if (rows.isEmpty()) {
+        QMessageBox::information(m_window, QStringLiteral("Вернуть в фонд"),
+                                 QStringLiteral("Сначала выделите в списке выбывших экземпляры, которые нужно вернуть."));
+        return;
+    }
+    const int count = m_model->restore(rows);
+    m_window->statusBar()->showMessage(
+        QStringLiteral("Возвращено в фонд: %1 экз. Они снова на вкладке «Книги».").arg(count), 10000);
+}
+
+void DocumentController::createReport()
+{
+    if (!m_workbook.isOpen())
+        return;
+    QTableView *table = m_window->withdrawnPage()->table();
+    QVector<int> rows = selectedModelRows(table, m_withdrawnProxy);
+    const bool onlySelected = !rows.isEmpty();
+    if (rows.isEmpty()) {
+        // Все показанные, в порядке на экране (с учётом сортировки и фильтров).
+        for (int r = 0; r < m_withdrawnProxy->rowCount(); ++r)
+            rows.push_back(m_withdrawnProxy->mapToSource(m_withdrawnProxy->index(r, 0)).row());
+    }
+    if (rows.isEmpty()) {
+        QMessageBox::information(m_window, QStringLiteral("Сформировать Excel"),
+                                 QStringLiteral("В списке выбывших нет экземпляров для отчёта."));
+        return;
+    }
+
+    QDir reports(QDir::cleanPath(QDir(core::WorkCopies::defaultDirectory()).absoluteFilePath(QStringLiteral("../Отчёты"))));
+    reports.mkpath(QStringLiteral("."));
+    const QString suggested = reports.filePath(
+        QStringLiteral("Выбывшие %1.xlsx").arg(QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"))));
+    QString path = QFileDialog::getSaveFileName(
+        m_window,
+        onlySelected ? QStringLiteral("Отчёт по выбранным выбывшим (%1 экз.)").arg(rows.size())
+                     : QStringLiteral("Отчёт по выбывшим (%1 экз.)").arg(rows.size()),
+        QDir::cleanPath(suggested), QStringLiteral("Файлы Excel (*.xlsx)"));
+    if (path.isEmpty())
+        return;
+    if (QFileInfo(path).suffix().compare(QLatin1String("xlsx"), Qt::CaseInsensitive) != 0)
+        path += QStringLiteral(".xlsx");
+    if (samePath(path, m_originalPath) || samePath(path, m_workPath)) {
+        showError(QStringLiteral("Сформировать Excel"),
+                  QStringLiteral("Этот файл — ваш фонд. Отчёт сохраняется в отдельный файл: выберите другое имя."));
+        return;
+    }
+
+    core::WithdrawalReport report;
+    report.fundName = QFileInfo(m_originalPath).completeBaseName();
+    report.createdOn = QDate::currentDate();
+    report.records = rows;
+    QString error;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = report.write(path, m_model->sheet(), &error);
+    QApplication::restoreOverrideCursor();
+    if (!ok) {
+        showError(QStringLiteral("Не удалось сформировать Excel"), error);
+        return;
+    }
+
+    QMessageBox box(m_window);
+    box.setIcon(QMessageBox::Information);
+    box.setWindowTitle(QStringLiteral("Сформировать Excel"));
+    box.setText(QStringLiteral("Excel-файл успешно сформирован: %1 экз.\n\n%2")
+                    .arg(rows.size())
+                    .arg(QDir::toNativeSeparators(path)));
+    auto *openButton = box.addButton(QStringLiteral("Открыть отчёт"), QMessageBox::AcceptRole);
+    box.addButton(QStringLiteral("Готово"), QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() == openButton)
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+}
+
+void DocumentController::showColumnFilter(FundTablePage *page, models::FundFilterProxy *proxy, int column,
+                                          const QPoint &globalPos)
 {
     if (column < 0 || column >= m_model->columnCount())
         return;
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    const auto values = m_proxy->columnValues(column);
+    const auto values = proxy->columnValues(column);
     QApplication::restoreOverrideCursor();
 
-    const models::ColumnCondition condition = m_proxy->columnCondition(column);
-    FilterPopup popup(m_model->sheet().columns.at(column).title, values, m_proxy->columnFilter(column),
-                      m_proxy->hasColumnFilter(column),
-                      m_proxy->hasColumnCondition(column) ? &condition : nullptr, m_window);
+    const models::ColumnCondition condition = proxy->columnCondition(column);
+    FilterPopup popup(m_model->sheet().columns.at(column).title, values, proxy->columnFilter(column),
+                      proxy->hasColumnFilter(column),
+                      proxy->hasColumnCondition(column) ? &condition : nullptr, m_window);
     // Окно — под заголовком столбца, но в пределах экрана.
     popup.adjustSize();
     QPoint pos = globalPos;
@@ -248,19 +443,19 @@ void DocumentController::showColumnFilter(int column, const QPoint &globalPos)
     if (popup.exec() != QDialog::Accepted)
         return;
 
-    QTableView *table = m_window->booksTable();
+    QTableView *table = page->table();
     switch (popup.result()) {
     case FilterPopup::Result::Apply:
         if (popup.allChecked())
-            m_proxy->clearColumnFilter(column);
+            proxy->clearColumnFilter(column);
         else
-            m_proxy->setColumnFilter(column, popup.checkedValues());
+            proxy->setColumnFilter(column, popup.checkedValues());
         break;
     case FilterPopup::Result::ApplyCondition:
-        m_proxy->setColumnCondition(column, popup.condition());
+        proxy->setColumnCondition(column, popup.condition());
         break;
     case FilterPopup::Result::Clear:
-        m_proxy->clearColumnFilter(column);
+        proxy->clearColumnFilter(column);
         break;
     case FilterPopup::Result::SortAscending:
         table->sortByColumn(column, Qt::AscendingOrder);
@@ -333,12 +528,18 @@ bool DocumentController::openFile(const QString &path)
 
     m_searchTimer.stop();
     m_proxy->clearAllFilters();
+    m_withdrawnProxy->clearAllFilters();
     if (read) {
         const QString sheetName = sheet.sheetName;
         const int headerRow = sheet.headerRow;
         m_model->setSheet(std::move(sheet));
-        m_window->showBooksTable(m_proxy);
-        fitColumns();
+        m_window->booksPage()->showTable(m_proxy);
+        m_window->withdrawnPage()->showTable(m_withdrawnProxy);
+        updateColumnVisibility();
+        fitColumns(m_window->booksTable());
+        m_fitWithdrawnPending = true;
+        if (m_window->isWithdrawnTabActive())
+            emit m_window->withdrawnTabShown();
         updateCounts();
         m_window->statusBar()->showMessage(
             QStringLiteral("Открыт файл «%1», лист «%2», заголовки в строке %3. Рабочая копия: %4")
@@ -347,7 +548,8 @@ bool DocumentController::openFile(const QString &path)
                 .arg(QDir::toNativeSeparators(workPath)));
     } else {
         m_model->setSheet({});
-        m_window->setBooksMessage(
+        m_window->withdrawnPage()->setMessage(QStringLiteral("В файле не найден список книг."));
+        m_window->booksPage()->setMessage(
             QStringLiteral("Файл открыт, но список книг в нём не найден.\n\n%1\n\n"
                            "Мастер импорта для файлов другого вида появится в следующих версиях.")
                 .arg(readError));
@@ -358,9 +560,8 @@ bool DocumentController::openFile(const QString &path)
     return true;
 }
 
-void DocumentController::fitColumns()
+void DocumentController::fitColumns(QTableView *table)
 {
-    QTableView *table = m_window->booksTable();
     QHeaderView *header = table->horizontalHeader();
     header->setResizeContentsPrecision(300);  // по первым строкам: быстро на 8000 книг
     table->resizeColumnsToContents();
@@ -376,7 +577,7 @@ void DocumentController::fitColumns()
     // но не меньше 40 % ширины таблицы.
     int others = 0;
     for (int c = 0; c < m_model->columnCount(); ++c) {
-        if (c != author)
+        if (c != author && !table->isColumnHidden(c))
             others += table->columnWidth(c);
     }
     const int viewport = table->viewport()->width();
@@ -397,7 +598,6 @@ void DocumentController::save()
     }
     m_model->markSaved();
     m_window->setUnsavedChanges(false);
-    m_window->setUndoText({});
     m_window->statusBar()->showMessage(QStringLiteral("Изменения сохранены в рабочую копию"), 5000);
 }
 
@@ -429,7 +629,6 @@ void DocumentController::saveAs()
         return;
     }
     m_model->markSaved();
-    m_window->setUndoText({});
     settings.setValue(kLastDirKey, QFileInfo(path).absolutePath());
     // Дальше программа работает с новым файлом.
     m_workPath = path;

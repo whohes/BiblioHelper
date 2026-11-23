@@ -14,6 +14,7 @@ class QTabWidget;
 namespace bh::ui {
 
 class FilterHeaderView;
+class FundTablePage;
 
 // Главное окно: крупные кнопки с подписями, вкладки и строка состояния.
 // Кнопки работы с документом включаются, когда открыт рабочий файл.
@@ -29,15 +30,13 @@ public:
     void setUnsavedChanges(bool unsaved);
     bool hasUnsavedChanges() const { return m_unsaved; }
 
-    // Текст на вкладке «Книги» вместо таблицы (файл не открыт или ошибка).
-    void setBooksMessage(const QString &text);
-    // Показать таблицу книг с данной моделью.
-    void showBooksTable(QAbstractItemModel *model);
-    QTableView *booksTable() const { return m_booksTable; }
-    FilterHeaderView *booksHeader() const { return m_booksHeader; }
-    // «Показано 120 из 3138 экземпляров».
-    // sumText — «на сумму … руб.» для видимых строк, или пусто, если столбца цены нет.
-    void setRecordCount(int shown, int total, bool filtered, const QString &sumText = {});
+    // Вкладки со списками: «Книги» (действующие) и «Выбывшие».
+    FundTablePage *booksPage() const { return m_booksPage; }
+    FundTablePage *withdrawnPage() const { return m_withdrawnPage; }
+    QTableView *booksTable() const;
+    FilterHeaderView *booksHeader() const;
+    bool isWithdrawnTabActive() const;
+    void showWithdrawnTab();
     // Кнопка «Отменить»: пустой текст — отменять нечего.
     void setUndoText(const QString &text);
 
@@ -50,6 +49,9 @@ signals:
     void withdrawRequested();
     void exportRequested();
     void undoRequested();
+    void restoreRequested();  // «Вернуть в фонд» на вкладке «Выбывшие»
+    void reportRequested();   // «Сформировать Excel» на вкладке «Выбывшие»
+    void withdrawnTabShown();
     void resetFiltersRequested();
     void searchTextChanged(const QString &text);
 
@@ -70,11 +72,10 @@ private:
     QLabel *m_unsavedLabel = nullptr;
     QLineEdit *m_search = nullptr;
     QTabWidget *m_tabs = nullptr;
-    QLabel *m_booksMessage = nullptr;
-    QStackedWidget *m_booksStack = nullptr;
-    QTableView *m_booksTable = nullptr;
-    FilterHeaderView *m_booksHeader = nullptr;
-    QLabel *m_countLabel = nullptr;
+    FundTablePage *m_booksPage = nullptr;
+    FundTablePage *m_withdrawnPage = nullptr;
+    QPushButton *m_restore = nullptr;
+    QPushButton *m_report = nullptr;
 
     QPushButton *m_open = nullptr;
     QPushButton *m_save = nullptr;

@@ -3,6 +3,7 @@
 #include "core/fund_sheet.h"
 
 #include <QAbstractTableModel>
+#include <QDate>
 #include <QHash>
 #include <QSet>
 
@@ -12,7 +13,7 @@ class XlsxWorkbook;
 
 namespace bh::models {
 
-// Таблица экземпляров листа фонда. Только чтение на этом этапе.
+// Таблица экземпляров листа фонда: правка, добавление, выбытие, отмена.
 // Номер строки Excel показывается в заголовке строки слева.
 class FundTableModel : public QAbstractTableModel
 {
@@ -27,6 +28,8 @@ public:
     static constexpr int ExcelRowRole = Qt::UserRole + 3;
     // Внутренний ID экземпляра.
     static constexpr int IdRole = Qt::UserRole + 4;
+    // Экземпляр выбыл (bool).
+    static constexpr int WithdrawnRole = Qt::UserRole + 5;
 
     explicit FundTableModel(QObject *parent = nullptr);
 
@@ -45,6 +48,13 @@ public:
     // Новая запись в конце списка; возвращает её строку в модели.
     int addRecord(const QVector<QVariant> &values);
 
+    // Выбытие экземпляров (строки модели): дата, причина, примечание.
+    // Записывает и видимый «Статус». Одно действие для отмены.
+    int withdraw(const QVector<int> &rows, const QDate &date, const QString &reason, const QString &note);
+    // Вернуть выбывшие экземпляры в фонд.
+    int restore(const QVector<int> &rows);
+    bool isWithdrawn(int row) const { return m_sheet.isWithdrawn(row); }
+
     bool canUndo() const { return !m_undo.isEmpty(); }
     QString undoText() const;
     void undo();
@@ -60,6 +70,8 @@ public:
 
 signals:
     void modifiedChanged(bool modified);
+    // Изменился список отмены (текст кнопки «Отменить»).
+    void undoChanged();
 
 private:
     struct Cell
@@ -69,16 +81,25 @@ private:
         QVariant sortKey;
     };
 
-    struct UndoStep
+    struct RowState
     {
-        enum Kind { Edit, Add } kind;
         int row = 0;
         QVector<QVariant> oldValues;
         QSet<int> oldDirty;
+    };
+
+    struct UndoStep
+    {
+        enum Kind { Edit, Add } kind;
+        QVector<RowState> rows;  // Edit: прежнее состояние строк; Add: одна строка
         QString text;
     };
 
     Cell makeCell(int column, const QVariant &value) const;
+    // Записать значения в строки одним шагом отмены; columns — какие столбцы меняются.
+    int applyToRows(const QVector<int> &rows, const QHash<int, QVariant> &values, const QString &undoText);
+    QString titleOf(int row) const;
+    void pushUndo(UndoStep step);
     void rebuildRow(int row);
     void setModified(bool modified);
 

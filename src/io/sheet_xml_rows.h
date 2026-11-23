@@ -27,6 +27,18 @@ QString shiftReferences(const QString &text, int afterRow, int count);
 // не трогает общий словарь строк книги). Строка 1 — первая строка таблицы.
 void replaceSheetData(pugi::xml_node worksheet, const QVector<QStringList> &rows);
 
+// Расширить автофильтр вправо до столбца lastColumn (новый столбец «Статус»),
+// если автофильтр начинается в строке headerRow или следующей. Возвращает true, если изменён.
+bool extendAutoFilter(pugi::xml_node worksheet, int headerRow, int lastColumn);
+
+// Оформление нового отчёта для печати и работы: альбомная страница A4
+// по ширине листа, закреплённые строки сверху (до headerRow включительно),
+// автофильтр на диапазоне filterRef («A4:G120»; пусто — без фильтра).
+void setReportLayout(pugi::xml_node worksheet, int headerRow, const QString &filterRef);
+
+// Номер столбца по буквам: «A» → 1, «$AB» → 28.
+int columnNumber(const QString &letters);
+
 // Пересчитать формулы при открытии в Excel (итоги после добавления строк).
 void requestFullCalcOnLoad(pugi::xml_node workbook);
 

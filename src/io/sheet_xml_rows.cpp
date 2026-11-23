@@ -246,6 +246,128 @@ QString columnName(int column)
     return letters;
 }
 
+int columnNumber(const QString &letters)
+{
+    int n = 0;
+    for (const QChar c : letters) {
+        if (c == QLatin1Char('$'))
+            continue;
+        const QChar u = c.toUpper();
+        if (u < QLatin1Char('A') || u > QLatin1Char('Z'))
+            break;
+        n = n * 26 + (u.unicode() - 'A' + 1);
+    }
+    return n;
+}
+
+namespace {
+
+// Вставить элемент на своё место: после последнего из тех, что идут раньше
+// по схеме листа (порядок элементов в XLSX важен для Excel).
+pugi::xml_node childInOrder(pugi::xml_node worksheet, const char *name, std::initializer_list<const char *> before)
+{
+    pugi::xml_node node = worksheet.child(name);
+    if (node)
+        return node;
+    pugi::xml_node anchor;
+    for (const char *b : before) {
+        if (pugi::xml_node n = worksheet.child(b))
+            anchor = n;
+    }
+    return anchor ? worksheet.insert_child_after(name, anchor) : worksheet.prepend_child(name);
+}
+
+void setAttr(pugi::xml_node node, const char *name, const char *value)
+{
+    pugi::xml_attribute a = node.attribute(name);
+    if (!a)
+        a = node.append_attribute(name);
+    a.set_value(value);
+}
+
+} // namespace
+
+void setReportLayout(pugi::xml_node worksheet, int headerRow, const QString &filterRef)
+{
+    // Уместить по ширине страницы.
+    pugi::xml_node sheetPr = worksheet.child("sheetPr");
+    if (!sheetPr)
+        sheetPr = worksheet.prepend_child("sheetPr");
+    pugi::xml_node fit = sheetPr.child("pageSetUpPr");
+    if (!fit)
+        fit = sheetPr.append_child("pageSetUpPr");
+    setAttr(fit, "fitToPage", "1");
+
+    // Закрепить шапку.
+    pugi::xml_node views = childInOrder(worksheet, "sheetViews", {"sheetPr", "dimension"});
+    pugi::xml_node view = views.child("sheetView");
+    if (!view) {
+        view = views.append_child("sheetView");
+        setAttr(view, "workbookViewId", "0");
+    }
+    pugi::xml_node pane = view.child("pane");
+    if (!pane)
+        pane = view.prepend_child("pane");
+    const QByteArray split = QByteArray::number(headerRow);
+    const QByteArray topLeft = "A" + QByteArray::number(headerRow + 1);
+    setAttr(pane, "ySplit", split.constData());
+    setAttr(pane, "topLeftCell", topLeft.constData());
+    setAttr(pane, "activePane", "bottomLeft");
+    setAttr(pane, "state", "frozen");
+    for (pugi::xml_node sel = view.child("selection"); sel; sel = view.child("selection"))
+        view.remove_child(sel);
+    pugi::xml_node selection = view.append_child("selection");
+    setAttr(selection, "pane", "bottomLeft");
+
+    if (!filterRef.isEmpty()) {
+        pugi::xml_node filter = childInOrder(worksheet, "autoFilter",
+                                             {"sheetData", "sheetCalcPr", "sheetProtection", "protectedRanges",
+                                              "scenarios"});
+        setAttr(filter, "ref", filterRef.toUtf8().constData());
+    }
+
+    // Excel ждёт описания столбцов по порядку, а QXlsx пишет их вразнобой.
+    if (pugi::xml_node cols = worksheet.child("cols")) {
+        std::vector<pugi::xml_node> list;
+        for (pugi::xml_node col = cols.child("col"); col; col = col.next_sibling("col"))
+            list.push_back(col);
+        std::stable_sort(list.begin(), list.end(), [](pugi::xml_node a, pugi::xml_node b) {
+            return a.attribute("min").as_int() < b.attribute("min").as_int();
+        });
+        for (pugi::xml_node col : list)
+            cols.append_move(col);
+    }
+
+    pugi::xml_node setup = childInOrder(worksheet, "pageSetup",
+                                        {"sheetData", "autoFilter", "mergeCells", "conditionalFormatting",
+                                         "dataValidations", "hyperlinks", "printOptions", "pageMargins"});
+    setAttr(setup, "paperSize", "9");  // A4
+    setAttr(setup, "orientation", "landscape");
+    setAttr(setup, "fitToWidth", "1");
+    setAttr(setup, "fitToHeight", "0");
+}
+
+bool extendAutoFilter(pugi::xml_node worksheet, int headerRow, int lastColumn)
+{
+    pugi::xml_attribute ref = worksheet.child("autoFilter").attribute("ref");
+    if (!ref)
+        return false;
+    const QString range = QString::fromUtf8(ref.value());
+    const int colon = range.indexOf(QLatin1Char(':'));
+    if (colon < 0)
+        return false;
+    const QString first = range.left(colon);
+    const QString last = range.mid(colon + 1);
+    // Автофильтр бывает и на строку ниже заголовков (Богдановская: заголовки
+    // в 4-й строке, автофильтр с 5-й).
+    const int top = rowOf(first);
+    if ((top != headerRow && top != headerRow + 1) || columnNumber(columnLetters(last)) >= lastColumn)
+        return false;
+    const QString extended = first + QLatin1Char(':') + columnName(lastColumn) + QString::number(rowOf(last));
+    ref.set_value(extended.toUtf8().constData());
+    return true;
+}
+
 void replaceSheetData(pugi::xml_node worksheet, const QVector<QStringList> &rows)
 {
     pugi::xml_node sheetData = worksheet.child("sheetData");

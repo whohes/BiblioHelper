@@ -54,8 +54,8 @@ RecordDialog::RecordDialog(const core::FundSheet &sheet, const QVector<QVariant>
     m_edits.resize(sheet.columns.size());
     for (int c = 0; c < sheet.columns.size(); ++c) {
         const core::FundColumn &column = sheet.columns.at(c);
-        if (column.excelColumn <= 0)
-            continue;
+        if (column.excelColumn <= 0 || column.role == core::ColumnRole::Status)
+            continue;  // вычисляемые столбцы; «Статус» меняется выбытием
         auto *edit = new QLineEdit(core::displayText(values.value(c)), this);
         edit->setMinimumHeight(38);
         edit->setPlaceholderText(placeholderFor(column.role));

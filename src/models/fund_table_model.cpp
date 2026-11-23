@@ -12,31 +12,20 @@ namespace bh::models {
 
 namespace {
 
-// Старая запись цены: «2р20к», «202р», «45к», «44 р. 10 коп.» → рубли.
-bool parseRubles(const QString &text, double *rubles)
-{
-    static const QRegularExpression re(
-        QStringLiteral("^\\s*(?:(\\d+)\\s*р(?:уб)?\\.?)?\\s*(?:(\\d{1,2})\\s*к(?:оп)?\\.?)?\\s*$"),
-        QRegularExpression::CaseInsensitiveOption);
-    const QRegularExpressionMatch m = re.match(text);
-    if (!m.hasMatch() || (m.captured(1).isEmpty() && m.captured(2).isEmpty()))
-        return false;
-    *rubles = m.captured(1).toDouble() + (m.captured(2).isEmpty() ? 0.0 : m.captured(2).toDouble() / 100.0);
-    return true;
-}
-
 // Число для сортировки: числа и текст вида «2018» сортируются как числа.
 QVariant sortKeyFor(const QVariant &value, const QString &display, core::ColumnRole role)
 {
     if (value.type() == QVariant::Double || value.type() == QVariant::LongLong
         || value.type() == QVariant::Int)
         return value.toDouble();
+    if (value.type() == QVariant::Date)
+        return double(value.toDate().toJulianDay());
     bool ok = false;
     double d = display.toDouble(&ok);
     if (!ok)
         d = QLocale(QLocale::Russian).toDouble(display, &ok);  // «2,4»
     if (!ok && role == core::ColumnRole::Price)
-        ok = parseRubles(display, &d);
+        ok = core::parseRubles(display, &d);
     if (ok)
         return d;
     return core::normalizeForSearch(display);
@@ -63,6 +52,7 @@ void FundTableModel::setSheet(core::FundSheet sheet)
     m_undo.clear();
     setModified(false);
     endResetModel();
+    emit undoChanged();
 }
 
 FundTableModel::Cell FundTableModel::makeCell(int column, const QVariant &value) const
@@ -101,6 +91,18 @@ int FundTableModel::rowForId(const QString &id) const
     return -1;
 }
 
+QString FundTableModel::titleOf(int row) const
+{
+    const int author = m_sheet.columnIndex(core::ColumnRole::AuthorTitle);
+    return author >= 0 ? m_cells.at(row).at(author).display.left(40) : QString();
+}
+
+void FundTableModel::pushUndo(UndoStep step)
+{
+    m_undo.push_back(std::move(step));
+    emit undoChanged();
+}
+
 bool FundTableModel::updateRecord(int row, const QVector<QVariant> &values)
 {
     if (row < 0 || row >= m_sheet.records.size())
@@ -108,8 +110,9 @@ bool FundTableModel::updateRecord(int row, const QVector<QVariant> &values)
     core::FundRecord &record = m_sheet.records[row];
     QSet<int> changed;
     for (int c = 0; c < m_sheet.columns.size() && c < values.size(); ++c) {
-        if (m_sheet.columns.at(c).excelColumn <= 0)
-            continue;  // вычисляемый столбец
+        const auto &column = m_sheet.columns.at(c);
+        if (column.excelColumn <= 0 || column.role == core::ColumnRole::Status)
+            continue;  // вычисляемый столбец; «Статус» меняет только выбытие
         if (core::displayText(values.at(c)) != core::displayText(record.values.at(c))
             || values.at(c).type() != record.values.at(c).type())
             changed.insert(c);
@@ -117,10 +120,8 @@ bool FundTableModel::updateRecord(int row, const QVector<QVariant> &values)
     if (changed.isEmpty())
         return false;
 
-    UndoStep step{UndoStep::Edit, row, record.values, m_dirty.value(row),
-                  QStringLiteral("Отменить изменение «%1»").arg(m_cells.at(row).value(
-                      std::max(0, m_sheet.columnIndex(core::ColumnRole::AuthorTitle))).display.left(40))};
-    m_undo.push_back(step);
+    pushUndo({UndoStep::Edit, {{row, record.values, m_dirty.value(row)}},
+              QStringLiteral("Отменить изменение «%1»").arg(titleOf(row))});
 
     for (int c : changed)
         record.values[c] = values.at(c);
@@ -131,6 +132,87 @@ bool FundTableModel::updateRecord(int row, const QVector<QVariant> &values)
     return true;
 }
 
+int FundTableModel::applyToRows(const QVector<int> &rows, const QHash<int, QVariant> &values,
+                                const QString &undoText)
+{
+    UndoStep step{UndoStep::Edit, {}, undoText};
+    for (int row : rows) {
+        if (row < 0 || row >= m_sheet.records.size())
+            continue;
+        core::FundRecord &record = m_sheet.records[row];
+        step.rows.push_back({row, record.values, m_dirty.value(row)});
+        for (auto it = values.cbegin(); it != values.cend(); ++it) {
+            record.values[it.key()] = it.value();
+            if (m_sheet.columns.at(it.key()).excelColumn > 0)
+                m_dirty[row].insert(it.key());
+        }
+        // Выбытие хранится в скрытом листе: запись нужно сохранить, даже
+        // если в видимых ячейках ничего не поменялось.
+        m_dirty[row];
+        rebuildRow(row);
+        emit dataChanged(index(row, 0), index(row, columnCount() - 1));
+    }
+    if (step.rows.isEmpty())
+        return 0;
+    const int count = step.rows.size();
+    pushUndo(std::move(step));
+    setModified(true);
+    return count;
+}
+
+int FundTableModel::withdraw(const QVector<int> &rows, const QDate &date, const QString &reason,
+                             const QString &note)
+{
+    const int dateCol = m_sheet.columnIndex(core::ColumnRole::WithdrawDate);
+    if (dateCol < 0 || !date.isValid())
+        return 0;
+    QVector<int> active;
+    for (int row : rows) {
+        if (row >= 0 && row < m_sheet.records.size() && !m_sheet.isWithdrawn(row))
+            active.push_back(row);
+    }
+    if (active.isEmpty())
+        return 0;
+    QHash<int, QVariant> values;
+    values.insert(dateCol, date);
+    auto set = [&](core::ColumnRole role, const QVariant &value) {
+        const int c = m_sheet.columnIndex(role);
+        if (c >= 0)
+            values.insert(c, value);
+    };
+    const QString cleanReason = reason.trimmed();
+    const QString cleanNote = note.trimmed();
+    set(core::ColumnRole::WithdrawReason, cleanReason.isEmpty() ? QVariant() : QVariant(cleanReason));
+    set(core::ColumnRole::WithdrawNote, cleanNote.isEmpty() ? QVariant() : QVariant(cleanNote));
+    set(core::ColumnRole::Status, core::withdrawalStatusText(date, cleanReason));
+    const QString text = active.size() == 1
+        ? QStringLiteral("Отменить выбытие «%1»").arg(titleOf(active.first()))
+        : QStringLiteral("Отменить выбытие %1 экз.").arg(active.size());
+    return applyToRows(active, values, text);
+}
+
+int FundTableModel::restore(const QVector<int> &rows)
+{
+    QVector<int> withdrawn;
+    for (int row : rows) {
+        if (row >= 0 && row < m_sheet.records.size() && m_sheet.isWithdrawn(row))
+            withdrawn.push_back(row);
+    }
+    if (withdrawn.isEmpty())
+        return 0;
+    QHash<int, QVariant> values;
+    for (auto role : {core::ColumnRole::WithdrawDate, core::ColumnRole::WithdrawReason,
+                      core::ColumnRole::WithdrawNote, core::ColumnRole::Status}) {
+        const int c = m_sheet.columnIndex(role);
+        if (c >= 0)
+            values.insert(c, QVariant());
+    }
+    const QString text = withdrawn.size() == 1
+        ? QStringLiteral("Отменить возврат в фонд «%1»").arg(titleOf(withdrawn.first()))
+        : QStringLiteral("Отменить возврат в фонд %1 экз.").arg(withdrawn.size());
+    return applyToRows(withdrawn, values, text);
+}
+
 int FundTableModel::addRecord(const QVector<QVariant> &values)
 {
     const int row = m_sheet.records.size();
@@ -139,7 +221,7 @@ int FundTableModel::addRecord(const QVector<QVariant> &values)
     record.excelRow = 0;
     record.values.resize(m_sheet.columns.size());
     for (int c = 0; c < m_sheet.columns.size() && c < values.size(); ++c) {
-        if (m_sheet.columns.at(c).excelColumn > 0)
+        if (m_sheet.columns.at(c).excelColumn > 0 && m_sheet.columns.at(c).role != core::ColumnRole::Status)
             record.values[c] = values.at(c);
     }
     beginInsertRows({}, row, row);
@@ -147,10 +229,7 @@ int FundTableModel::addRecord(const QVector<QVariant> &values)
     m_cells.push_back({});
     rebuildRow(row);
     endInsertRows();
-    const int author = m_sheet.columnIndex(core::ColumnRole::AuthorTitle);
-    m_undo.push_back({UndoStep::Add, row, {}, {},
-                      QStringLiteral("Отменить добавление «%1»")
-                          .arg(author >= 0 ? m_cells.at(row).at(author).display.left(40) : QString())});
+    pushUndo({UndoStep::Add, {{row, {}, {}}}, QStringLiteral("Отменить добавление «%1»").arg(titleOf(row))});
     setModified(true);
     return row;
 }
@@ -166,20 +245,24 @@ void FundTableModel::undo()
         return;
     const UndoStep step = m_undo.takeLast();
     if (step.kind == UndoStep::Add) {
-        beginRemoveRows({}, step.row, step.row);
-        m_sheet.records.remove(step.row);
-        m_cells.remove(step.row);
-        m_dirty.remove(step.row);
+        const int row = step.rows.first().row;
+        beginRemoveRows({}, row, row);
+        m_sheet.records.remove(row);
+        m_cells.remove(row);
+        m_dirty.remove(row);
         endRemoveRows();
     } else {
-        m_sheet.records[step.row].values = step.oldValues;
-        if (step.oldDirty.isEmpty())
-            m_dirty.remove(step.row);
-        else
-            m_dirty[step.row] = step.oldDirty;
-        rebuildRow(step.row);
-        emit dataChanged(index(step.row, 0), index(step.row, columnCount() - 1));
+        for (const RowState &state : step.rows) {
+            m_sheet.records[state.row].values = state.oldValues;
+            if (state.oldDirty.isEmpty())
+                m_dirty.remove(state.row);
+            else
+                m_dirty[state.row] = state.oldDirty;
+            rebuildRow(state.row);
+            emit dataChanged(index(state.row, 0), index(state.row, columnCount() - 1));
+        }
     }
+    emit undoChanged();
     setModified(!m_dirty.isEmpty() || newRecordCount() > 0);
 }
 
@@ -195,14 +278,50 @@ bool FundTableModel::writeChanges(io::XlsxWorkbook &workbook, QString *error)
 {
     const QString &sheet = m_sheet.sheetName;
 
+    // 0. Столбец «Статус» появляется в Excel при первом выбытии.
+    // Оформление берём у последнего подписанного столбца таблицы («Отдел»).
+    const int statusCol = m_sheet.columnIndex(core::ColumnRole::Status);
+    bool newStatusColumn = false;
+    int styleSource = 0;
+    if (statusCol >= 0 && !m_sheet.columns.at(statusCol).inFile) {
+        bool anyStatus = false;
+        for (const auto &record : qAsConst(m_sheet.records))
+            anyStatus = anyStatus || !core::displayText(record.values.at(statusCol)).isEmpty();
+        if (anyStatus) {
+            for (const core::FundColumn &column : qAsConst(m_sheet.columns)) {
+                if (column.excelColumn > 0 && column.inFile && column.role != core::ColumnRole::Mark)
+                    styleSource = std::max(styleSource, column.excelColumn);
+            }
+            core::FundColumn &column = m_sheet.columns[statusCol];
+            const int excelCol = column.excelColumn;
+            if (styleSource > 0 && !workbook.copyCellStyle(sheet, m_sheet.headerRow, styleSource, excelCol, error))
+                return false;
+            if (!workbook.setCellValue(sheet, m_sheet.headerRow, excelCol, column.title, error)
+                || !workbook.setColumnWidth(sheet, excelCol, 28, error)
+                || !workbook.extendAutoFilter(sheet, m_sheet.headerRow, excelCol, error))
+                return false;
+            column.inFile = true;
+            newStatusColumn = true;
+        }
+    }
+    // Ячейка нового столбца получает оформление столбца-образца.
+    auto writeCell = [&](int excelRow, int c, const QVariant &value) {
+        const int excelCol = m_sheet.columns.at(c).excelColumn;
+        if (newStatusColumn && c == statusCol && styleSource > 0
+            && !workbook.copyCellStyle(sheet, excelRow, styleSource, excelCol, error))
+            return false;
+        return workbook.setCellValue(sheet, excelRow, excelCol, value, error);
+    };
+
     // 1. Изменённые ячейки существующих строк.
     for (auto it = m_dirty.cbegin(); it != m_dirty.cend(); ++it) {
         const core::FundRecord &record = m_sheet.records.at(it.key());
         if (record.excelRow <= 0)
             continue;  // новая запись пишется целиком ниже
         for (int c : it.value()) {
-            if (!workbook.setCellValue(sheet, record.excelRow, m_sheet.columns.at(c).excelColumn,
-                                       record.values.at(c), error))
+            if (m_sheet.columns.at(c).excelColumn <= 0 || !m_sheet.columns.at(c).inFile)
+                continue;
+            if (!writeCell(record.excelRow, c, record.values.at(c)))
                 return false;
         }
     }
@@ -225,9 +344,9 @@ bool FundTableModel::writeChanges(io::XlsxWorkbook &workbook, QString *error)
             record.excelRow = afterRow + 1 + i;
             for (int c = 0; c < m_sheet.columns.size(); ++c) {
                 const int column = m_sheet.columns.at(c).excelColumn;
-                if (column <= 0 || !record.values.at(c).isValid())
+                if (column <= 0 || !m_sheet.columns.at(c).inFile || !record.values.at(c).isValid())
                     continue;
-                if (!workbook.setCellValue(sheet, record.excelRow, column, record.values.at(c), error))
+                if (!writeCell(record.excelRow, c, record.values.at(c)))
                     return false;
             }
         }
@@ -241,6 +360,7 @@ void FundTableModel::markSaved()
 {
     m_dirty.clear();
     m_undo.clear();  // отмена — только до сохранения
+    emit undoChanged();
     if (!m_sheet.records.isEmpty())
         emit headerDataChanged(Qt::Vertical, 0, m_sheet.records.size() - 1);
     setModified(false);
@@ -276,6 +396,8 @@ QVariant FundTableModel::data(const QModelIndex &index, int role) const
         return m_sheet.records.at(index.row()).excelRow;
     case IdRole:
         return m_sheet.records.at(index.row()).id;
+    case WithdrawnRole:
+        return m_sheet.isWithdrawn(index.row());
     case Qt::FontRole:
         if (m_dirty.value(index.row()).contains(index.column()) || m_sheet.records.at(index.row()).excelRow <= 0) {
             QFont font;

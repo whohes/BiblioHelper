@@ -3,7 +3,9 @@
 
 #include "core/copy_ids.h"
 #include "core/fund_sheet.h"
+#include "core/withdrawal_report.h"
 #include "io/xlsx_workbook.h"
+#include "models/fund_filter_proxy.h"
 #include "models/fund_table_model.h"
 
 #include <QDir>
@@ -28,6 +30,9 @@ private slots:
     void idsFollowShiftedRows();
     void editAddUndo();
     void writeAndReopen();
+    void withdrawUndoRestore();
+    void withdrawWriteAndReopen();
+    void report();
 
 private:
     static QString dataPath(const QString &name)
@@ -242,6 +247,243 @@ void EditingTest::writeAndReopen()
     // Итоговые строки уехали вниз, а не попали в записи.
     for (const auto &r : sheet.records)
         QVERIFY(!bh::core::displayText(r.values.at(author)).startsWith(QStringLiteral("По документам")));
+}
+
+void EditingTest::withdrawUndoRestore()
+{
+    XlsxWorkbook wb;
+    FundSheet sheet;
+    QVERIFY(openSheet(wb, dataPath(QStringLiteral("fund_bobrinka.xlsx")), &sheet));
+    CopyIds::assign(&sheet, {});
+    const int count = sheet.records.size();
+
+    bh::models::FundTableModel model;
+    model.setSheet(sheet);
+    bh::models::FundFilterProxy active;
+    active.setSourceModel(&model);
+    active.setStatusFilter(bh::models::FundFilterProxy::StatusFilter::Active);
+    active.setDynamicSortFilter(true);
+    bh::models::FundFilterProxy withdrawn;
+    withdrawn.setSourceModel(&model);
+    withdrawn.setStatusFilter(bh::models::FundFilterProxy::StatusFilter::Withdrawn);
+    withdrawn.setDynamicSortFilter(true);
+    QCOMPARE(active.rowCount(), count);
+    QCOMPARE(withdrawn.rowCount(), 0);
+
+    const QDate date(2026, 11, 23);
+    QCOMPARE(model.withdraw({3, 4}, date, QStringLiteral(" ветхость "), QStringLiteral("акт №5")), 2);
+    QVERIFY(model.isWithdrawn(3));
+    QVERIFY(model.isModified());
+    QCOMPARE(active.rowCount(), count - 2);
+    QCOMPARE(withdrawn.rowCount(), 2);
+    const int status = model.sheet().columnIndex(ColumnRole::Status);
+    const int dateCol = model.sheet().columnIndex(ColumnRole::WithdrawDate);
+    const int reason = model.sheet().columnIndex(ColumnRole::WithdrawReason);
+    QCOMPARE(model.index(3, status).data().toString(), QStringLiteral("Выбыло 23.11.2026, ветхость"));
+    QCOMPARE(model.index(3, dateCol).data().toString(), QStringLiteral("23.11.2026"));
+    QCOMPARE(model.index(4, reason).data().toString(), QStringLiteral("ветхость"));
+    QCOMPARE(model.undoText(), QStringLiteral("Отменить выбытие 2 экз."));
+
+    // Уже выбывший экземпляр второй раз не списывается.
+    QCOMPARE(model.withdraw({3}, date, QStringLiteral("утеря"), {}), 0);
+
+    // Сумма считается только по действующим.
+    const int price = model.sheet().columnIndex(ColumnRole::Price);
+    const int quantity = model.sheet().columnIndex(ColumnRole::Quantity);
+    QCOMPARE(active.totals(price, quantity).rows, count - 2);
+
+    model.undo();
+    QVERIFY(!model.isWithdrawn(3));
+    QCOMPARE(withdrawn.rowCount(), 0);
+    QVERIFY(!model.isModified());
+
+    QCOMPARE(model.withdraw({7}, date, QStringLiteral("утеря"), {}), 1);
+    QCOMPARE(model.restore({7, 8}), 1);  // 8 не выбывал
+    QVERIFY(!model.isWithdrawn(7));
+    QVERIFY(model.index(7, status).data().toString().isEmpty());
+    model.undo();  // отмена возврата: снова выбыл
+    QVERIFY(model.isWithdrawn(7));
+    QCOMPARE(model.index(7, reason).data().toString(), QStringLiteral("утеря"));
+}
+
+void EditingTest::withdrawWriteAndReopen()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString work = tmp.filePath(QStringLiteral("work.xlsx"));
+    const QString saved = tmp.filePath(QStringLiteral("saved.xlsx"));
+    const QString saved2 = tmp.filePath(QStringLiteral("saved2.xlsx"));
+    QVERIFY(QFile::copy(dataPath(QStringLiteral("fund_bogdanovka_2025.xlsx")), work));
+
+    QString withdrawnId;
+    int withdrawnRow = 0;
+    int statusExcelCol = 0;
+    int count = 0;
+    {
+        XlsxWorkbook wb;
+        FundSheet sheet;
+        QVERIFY(openSheet(wb, work, &sheet));
+        CopyIds::assign(&sheet, {});
+        count = sheet.records.size();
+        const int status = sheet.columnIndex(ColumnRole::Status);
+        QVERIFY(status >= 0);
+        QVERIFY(!sheet.columns.at(status).inFile);
+        statusExcelCol = sheet.columns.at(status).excelColumn;
+        QVERIFY(statusExcelCol > 1);
+
+        bh::models::FundTableModel model;
+        model.setSheet(sheet);
+        // Правка другой книги и новая книга в том же сохранении.
+        QVector<QVariant> fresh(sheet.columns.size());
+        fresh[sheet.columnIndex(ColumnRole::AuthorTitle)] = QStringLiteral("Тестов Т. Новая книга");
+        fresh[sheet.columnIndex(ColumnRole::Inventory)] = qlonglong(999002);
+        const int added = model.addRecord(fresh);
+        QCOMPARE(model.withdraw({20, added}, QDate(2026, 11, 23), QStringLiteral("утеря"), QStringLiteral("акт 1")), 2);
+        withdrawnId = model.sheet().records.at(20).id;
+        withdrawnRow = model.sheet().records.at(20).excelRow;
+
+        QString error;
+        QVERIFY2(model.writeChanges(wb, &error), qPrintable(error));
+        QVERIFY2(wb.saveAs(saved, &error), qPrintable(error));
+        model.markSaved();
+        QCOMPARE(wb.cellValue(sheet.sheetName, sheet.headerRow, statusExcelCol).toString(), QStringLiteral("Статус"));
+    }
+
+    FundSheet sheet;
+    {
+        XlsxWorkbook wb;
+        QVERIFY(openSheet(wb, saved, &sheet));
+        QCOMPARE(sheet.records.size(), count + 1);
+        // «Статус» теперь в файле, на том же месте.
+        const int status = sheet.columnIndex(ColumnRole::Status);
+        QVERIFY(status >= 0);
+        QVERIFY(sheet.columns.at(status).inFile);
+        QCOMPARE(sheet.columns.at(status).excelColumn, statusExcelCol);
+        QCOMPARE(wb.cellValue(sheet.sheetName, withdrawnRow, statusExcelCol).toString(),
+                 QStringLiteral("Выбыло 23.11.2026, утеря"));
+        // Прочие строки без статуса.
+        QVERIFY(wb.cellValue(sheet.sheetName, withdrawnRow + 1, statusExcelCol).toString().isEmpty());
+
+        QCOMPARE(CopyIds::assign(&sheet, CopyIds::load(wb)), 0);
+        int withdrawnCount = 0;
+        int row = -1;
+        for (int i = 0; i < sheet.records.size(); ++i) {
+            if (sheet.isWithdrawn(i)) {
+                ++withdrawnCount;
+                if (sheet.records.at(i).id == withdrawnId)
+                    row = i;
+            }
+        }
+        QCOMPARE(withdrawnCount, 2);
+        QVERIFY(row >= 0);
+        QCOMPARE(sheet.records.at(row).values.at(sheet.columnIndex(ColumnRole::WithdrawDate)).toDate(),
+                 QDate(2026, 11, 23));
+        QCOMPARE(bh::core::displayText(sheet.records.at(row).values.at(sheet.columnIndex(ColumnRole::WithdrawNote))),
+                 QStringLiteral("акт 1"));
+        QVERIFY(sheet.isWithdrawn(sheet.records.size() - 1));  // новая книга тоже выбыла
+
+        // Вернуть в фонд и сохранить ещё раз.
+        bh::models::FundTableModel model;
+        model.setSheet(sheet);
+        QCOMPARE(model.restore({row}), 1);
+        QString error;
+        QVERIFY2(model.writeChanges(wb, &error), qPrintable(error));
+        QVERIFY2(wb.saveAs(saved2, &error), qPrintable(error));
+    }
+
+    XlsxWorkbook wb;
+    FundSheet again;
+    QVERIFY(openSheet(wb, saved2, &again));
+    CopyIds::assign(&again, CopyIds::load(wb));
+    int withdrawnCount = 0;
+    for (int i = 0; i < again.records.size(); ++i)
+        withdrawnCount += again.isWithdrawn(i) ? 1 : 0;
+    QCOMPARE(withdrawnCount, 1);
+    QVERIFY(wb.cellValue(again.sheetName, withdrawnRow, statusExcelCol).toString().isEmpty());
+}
+
+void EditingTest::report()
+{
+    XlsxWorkbook source;
+    FundSheet sheet;
+    QVERIFY(openSheet(source, dataPath(QStringLiteral("fund_bogdanovka_2025.xlsx")), &sheet));
+    CopyIds::assign(&sheet, {});
+    const int author = sheet.columnIndex(ColumnRole::AuthorTitle);
+    const int price = sheet.columnIndex(ColumnRole::Price);
+
+    // Три экземпляра: цена числом, цена «NрMк» и строка без цены (если найдётся).
+    QVector<int> rows;
+    int textPrice = -1;
+    int noPrice = -1;
+    for (int i = 0; i < sheet.records.size(); ++i) {
+        const QVariant p = sheet.records.at(i).values.at(price);
+        const QString t = bh::core::displayText(p);
+        double rub = 0;
+        if (textPrice < 0 && p.type() == QVariant::String && bh::core::parseRubles(t, &rub) && t.contains(QStringLiteral("р")))
+            textPrice = i;
+        if (noPrice < 0 && !bh::core::priceInRubles(p, &rub))
+            noPrice = i;
+    }
+    QVERIFY(textPrice > 0 && noPrice > 0 && textPrice != noPrice);
+    int active = 1;
+    while (active == textPrice || active == noPrice)
+        ++active;
+    // active — не выбыл, повтор textPrice — дубль: в отчёт не попадают.
+    rows << 0 << textPrice << noPrice << active << textPrice;
+
+    bh::models::FundTableModel model;
+    model.setSheet(sheet);
+    QCOMPARE(model.withdraw({0, textPrice, noPrice}, QDate(2026, 11, 20), QStringLiteral("ветхость"),
+                            QStringLiteral("акт № 3")), 3);
+
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    // Кириллица в пути, как в «Документы\\BiblioHelper\\Отчёты».
+    const QString path = tmp.filePath(QStringLiteral("Отчёты/Выбывшие 2026-11-23.xlsx"));
+    QVERIFY(QDir(tmp.path()).mkpath(QStringLiteral("Отчёты")));
+    bh::core::WithdrawalReport report;
+    report.fundName = QStringLiteral("Фонд Богдановской библиотеки 2025");
+    report.createdOn = QDate(2026, 11, 23);
+    report.records = rows;
+    QString error;
+    QVERIFY2(report.write(path, model.sheet(), &error), qPrintable(error));
+
+    XlsxWorkbook wb;
+    QVERIFY2(wb.open(path, &error), qPrintable(error));
+    const QString s = wb.sheetNames().first();
+    QCOMPARE(s, QStringLiteral("Выбывшие"));
+    QVERIFY(wb.cellValue(s, 2, 1).toString().contains(QStringLiteral("Богдановской")));
+    const QStringList titles = bh::core::WithdrawalReport::columnTitles();
+    for (int c = 0; c < titles.size(); ++c)
+        QCOMPARE(wb.cellValue(s, 4, c + 1).toString(), titles.at(c));
+
+    double expected = 0;
+    for (int i = 0; i < 3; ++i) {
+        const auto &record = model.sheet().records.at(rows.at(i));
+        const int r = 5 + i;
+        QCOMPARE(wb.cellValue(s, r, 1).toInt(), i + 1);
+        QCOMPARE(bh::core::displayText(wb.cellValue(s, r, 2)), bh::core::displayText(record.values.at(author)));
+        QCOMPARE(wb.cellValue(s, r, 6).toString(), QStringLiteral("ветхость"));
+        QCOMPARE(wb.cellValue(s, r, 7).toString(), QStringLiteral("акт № 3"));
+        double rub = 0;
+        if (bh::core::priceInRubles(record.values.at(price), &rub)) {
+            QVERIFY(qAbs(wb.cellValue(s, r, 4).toDouble() - rub) < 1e-9);
+            expected += rub;
+        }
+    }
+    // «Сорок четыре рубля десять копеек» стали числом.
+    double rub = 0;
+    QVERIFY(bh::core::parseRubles(bh::core::displayText(model.sheet().records.at(textPrice).values.at(price)), &rub));
+    QCOMPARE(wb.cellValue(s, 6, 4).toDouble(), rub);
+    // Без цены — как в фонде.
+    QCOMPARE(bh::core::displayText(wb.cellValue(s, 7, 4)),
+             bh::core::displayText(model.sheet().records.at(noPrice).values.at(price)));
+    // Дата выбытия — дата Excel (серийное число 46346 = 20.11.2026).
+    QCOMPARE(wb.cellValue(s, 5, 5).toInt(), 46346);
+    // Итог.
+    QCOMPARE(wb.cellValue(s, 8, 2).toString(), QStringLiteral("Итого: 3 экз."));
+    QVERIFY(qAbs(wb.cellValue(s, 8, 4).toDouble() - expected) < 1e-6);
+    QVERIFY(wb.cellValue(s, 9, 2).toString().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(EditingTest)

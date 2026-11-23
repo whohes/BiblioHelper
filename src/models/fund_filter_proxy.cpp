@@ -92,6 +92,15 @@ QString FundFilterProxy::emptyValueLabel()
     return QStringLiteral("(пусто)");
 }
 
+void FundFilterProxy::setStatusFilter(StatusFilter filter)
+{
+    if (filter == m_status)
+        return;
+    m_status = filter;
+    invalidateFilter();
+    emit filtersChanged();
+}
+
 void FundFilterProxy::setSearchText(const QString &text)
 {
     if (text == m_searchText)
@@ -146,6 +155,12 @@ bool FundFilterProxy::acceptsRow(int sourceRow, int ignoredColumn) const
     const QAbstractItemModel *model = sourceModel();
     if (!model)
         return true;
+
+    if (m_status != StatusFilter::All) {
+        const bool withdrawn = model->index(sourceRow, 0).data(FundTableModel::WithdrawnRole).toBool();
+        if (withdrawn != (m_status == StatusFilter::Withdrawn))
+            return false;
+    }
 
     for (auto it = m_columnFilters.cbegin(); it != m_columnFilters.cend(); ++it) {
         if (it.key() == ignoredColumn)

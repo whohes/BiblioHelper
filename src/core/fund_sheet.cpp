@@ -4,6 +4,7 @@
 #include "io/xlsx_workbook.h"
 
 #include <QLocale>
+#include <QRegularExpression>
 
 #include <algorithm>
 #include <cmath>
@@ -95,6 +96,8 @@ QString displayText(const QVariant &value)
             return QString::number(static_cast<qint64>(d));
         return QLocale(QLocale::Russian).toString(d, 'g', 12);
     }
+    case QVariant::Date:
+        return value.toDate().toString(QStringLiteral("dd.MM.yyyy"));
     case QVariant::Bool:
         return value.toBool() ? QStringLiteral("Да") : QStringLiteral("Нет");
     case QVariant::String:
@@ -137,6 +140,8 @@ ColumnRole FundSheetReader::roleForHeader(const QString &header)
     const QString h = normalizeForSearch(header);
     if (h.isEmpty())
         return ColumnRole::Other;
+    if (h == QStringLiteral("статус"))
+        return ColumnRole::Status;
     if (h.contains(QStringLiteral("автор")) || h.contains(QStringLiteral("назван")))
         return ColumnRole::AuthorTitle;
     if (h.contains(QStringLiteral("инв")))
@@ -242,8 +247,89 @@ bool FundSheetReader::read(const io::XlsxWorkbook &workbook, const QString &shee
             result.records.push_back(std::move(record));
     }
 
+    addWithdrawalColumns(&result);
     *out = std::move(result);
     return true;
+}
+
+void FundSheetReader::addWithdrawalColumns(FundSheet *sheet)
+{
+    auto add = [sheet](int excelColumn, const QString &title, ColumnRole role, bool inFile) {
+        if (sheet->columnIndex(role) >= 0)
+            return;
+        FundColumn column;
+        column.excelColumn = excelColumn;
+        column.title = title;
+        column.role = role;
+        column.inFile = inFile;
+        sheet->columns.push_back(column);
+        for (FundRecord &record : sheet->records) {
+            record.values.push_back({});
+            if (!record.colors.isEmpty())
+                record.colors.push_back(0);
+        }
+    };
+    int lastColumn = 0;
+    for (const FundColumn &column : qAsConst(sheet->columns))
+        lastColumn = std::max(lastColumn, column.excelColumn);
+    add(lastColumn + 1, QStringLiteral("Статус"), ColumnRole::Status, false);
+    add(0, QStringLiteral("Дата выбытия"), ColumnRole::WithdrawDate, false);
+    add(0, QStringLiteral("Причина выбытия"), ColumnRole::WithdrawReason, false);
+    add(0, QStringLiteral("Примечание"), ColumnRole::WithdrawNote, false);
+}
+
+bool FundSheet::isWithdrawn(const FundRecord &record) const
+{
+    const int date = columnIndex(ColumnRole::WithdrawDate);
+    return date >= 0 && date < record.values.size() && record.values.at(date).isValid()
+        && !record.values.at(date).isNull();
+}
+
+// Старая запись цены: «2р20к», «202р», «45к», «44 р. 10 коп.» → рубли.
+bool parseRubles(const QString &text, double *rubles)
+{
+    static const QRegularExpression re(
+        QStringLiteral("^\\s*(?:(\\d+)\\s*р(?:уб)?\\.?)?\\s*(?:(\\d{1,2})\\s*к(?:оп)?\\.?)?\\s*$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch m = re.match(text);
+    if (!m.hasMatch() || (m.captured(1).isEmpty() && m.captured(2).isEmpty()))
+        return false;
+    *rubles = m.captured(1).toDouble() + (m.captured(2).isEmpty() ? 0.0 : m.captured(2).toDouble() / 100.0);
+    return true;
+}
+
+bool priceInRubles(const QVariant &value, double *rubles)
+{
+    if (value.type() == QVariant::Double || value.type() == QVariant::LongLong || value.type() == QVariant::Int) {
+        *rubles = value.toDouble();
+        return true;
+    }
+    const QString text = displayText(value);
+    if (text.isEmpty())
+        return false;
+    bool ok = false;
+    QString decimal = text;
+    decimal.replace(QLatin1Char(','), QLatin1Char('.'));
+    const double d = decimal.toDouble(&ok);
+    if (ok) {
+        *rubles = d;
+        return true;
+    }
+    return parseRubles(text, rubles);
+}
+
+QStringList withdrawalReasons()
+{
+    return {QStringLiteral("ветхость"), QStringLiteral("утеря"), QStringLiteral("устаревшая по содержанию"),
+            QStringLiteral("непрофильная"), QStringLiteral("другое")};
+}
+
+QString withdrawalStatusText(const QDate &date, const QString &reason)
+{
+    QString text = QStringLiteral("Выбыло ") + date.toString(QStringLiteral("dd.MM.yyyy"));
+    if (!reason.trimmed().isEmpty())
+        text += QStringLiteral(", ") + reason.trimmed();
+    return text;
 }
 
 void FundSheetReader::applyFontColors(FundSheet *sheet, const io::FontColors &colors)
