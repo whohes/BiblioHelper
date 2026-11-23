@@ -1,5 +1,7 @@
 # Библиотека с логикой и работой с файлами: её же подключают автотесты.
 add_library(bh_core STATIC
+    core/work_copy.h
+    core/work_copy.cpp
     io/xlsx_workbook.h
     io/xlsx_workbook.cpp
 )
@@ -10,6 +12,8 @@ target_link_libraries(bh_core
 
 add_executable(BiblioHelper WIN32
     main.cpp
+    ui/document_controller.h
+    ui/document_controller.cpp
     ui/main_window.h
     ui/main_window.cpp
     resources/resources.qrc

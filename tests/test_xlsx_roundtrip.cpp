@@ -5,11 +5,13 @@
 // скрытый служебный лист, сохранить в новый файл и сравнить части XLSX
 // с исходником.
 
+#include "core/work_copy.h"
 #include "io/xlsx_workbook.h"
 
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -106,6 +108,7 @@ private slots:
     void roundtrip();
     void cyrillicPath();
     void cyrillicTempFolder();
+    void workCopies();
 
 private:
     QString dataPath(const QString &name) const
@@ -252,6 +255,37 @@ void XlsxRoundtripTest::cyrillicPath()
     bh::io::XlsxWorkbook reopened;
     QVERIFY2(reopened.open(saved, &error), qPrintable(error));
     QCOMPARE(reopened.sheetNames(), wb.sheetNames());
+}
+
+void XlsxRoundtripTest::workCopies()
+{
+    // Рабочая копия создаётся рядом с другими, исходник не трогается,
+    // повторное открытие того же файла не затирает прежнюю копию.
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString original = dataPath(QStringLiteral("fund_bobrinka.xlsx"));
+    const QByteArray before = sha256(original);
+
+    bh::core::WorkCopies copies(tmp.filePath(QStringLiteral("Рабочие файлы")));
+    QString error;
+    const QString first = copies.create(original, &error);
+    QVERIFY2(!first.isEmpty(), qPrintable(error));
+    QCOMPARE(QFileInfo(first).fileName(), QStringLiteral("fund_bobrinka (рабочая копия).xlsx"));
+    const QString second = copies.create(original, &error);
+    QCOMPARE(QFileInfo(second).fileName(), QStringLiteral("fund_bobrinka (рабочая копия 2).xlsx"));
+
+    bh::io::XlsxWorkbook wb;
+    QVERIFY2(wb.open(first, &error), qPrintable(error));
+    QVERIFY(wb.setCellValue(wb.sheetNames().first(), 10, 1, QStringLiteral("Проверка"), &error));
+    QVERIFY2(wb.saveAs(first, &error), qPrintable(error)); // «Сохранить» поверх рабочей копии
+    wb.close();
+
+    bh::io::XlsxWorkbook reopened;
+    QVERIFY2(reopened.open(first, &error), qPrintable(error));
+    QCOMPARE(reopened.cellValue(reopened.sheetNames().first(), 10, 1).toString(),
+             QStringLiteral("Проверка"));
+    QCOMPARE(sha256(original), before);
+    QVERIFY(copies.create(tmp.filePath(QStringLiteral("нет такого.xlsx")), &error).isEmpty());
 }
 
 void XlsxRoundtripTest::cyrillicTempFolder()

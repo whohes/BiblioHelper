@@ -1,3 +1,4 @@
+#include "ui/document_controller.h"
 #include "ui/main_window.h"
 
 #include <QApplication>
@@ -28,6 +29,12 @@ int main(int argc, char *argv[])
         app.setStyleSheet(QString::fromUtf8(style.readAll()));
 
     bh::ui::MainWindow window;
+    auto *documents = new bh::ui::DocumentController(&window);
     window.showMaximized();
+
+    // Файл можно открыть, перетащив его на значок программы.
+    const QStringList args = QApplication::arguments();
+    if (args.size() > 1)
+        documents->openFile(args.at(1));
     return app.exec();
 }
