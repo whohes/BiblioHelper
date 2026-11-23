@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QFile>
 #include <QFont>
+#include <QStyleFactory>
 
 int main(int argc, char *argv[])
 {
@@ -19,8 +20,12 @@ int main(int argc, char *argv[])
     QApplication::setApplicationVersion(QStringLiteral(BIBLIOHELPER_VERSION));
     QApplication::setOrganizationName(QStringLiteral("BiblioHelper"));
 
-    // Крупный шрифт по умолчанию (ТЗ: 12–14 pt).
+    // Fusion — одинаковый современный вид на Windows 7–11 (стиль Windows 7 выглядит устаревшим).
+    QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+
+    // Крупный шрифт по умолчанию (ТЗ: 12–14 pt), Segoe UI есть во всех Windows начиная с Vista.
     QFont font = QApplication::font();
+    font.setFamily(QStringLiteral("Segoe UI"));
     font.setPointSize(13);
     QApplication::setFont(font);
 

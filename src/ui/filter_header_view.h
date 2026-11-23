@@ -24,12 +24,14 @@ protected:
     void paintSection(QPainter *painter, const QRect &rect, int logicalIndex) const override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
     QSize sectionSizeFromContents(int logicalIndex) const override;
 
 private:
     QRect buttonRect(const QRect &sectionRect) const;
 
     QList<int> m_filtered;
+    int m_hoverSection = -1;  // секция, над кнопкой фильтра которой курсор
 };
 
 } // namespace bh::ui

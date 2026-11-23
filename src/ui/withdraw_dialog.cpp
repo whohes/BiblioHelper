@@ -3,6 +3,7 @@
 #include <QComboBox>
 #include <QDateEdit>
 #include <QDialogButtonBox>
+#include <QStyle>
 #include <QFormLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -106,6 +107,9 @@ WithdrawDialog::WithdrawDialog(const core::FundSheet &sheet, const QVector<int> 
     auto *ok = buttons->addButton(QStringLiteral("Оформить выбытие (%1 экз.)").arg(records.size()),
                                   QDialogButtonBox::AcceptRole);
     auto *cancel = buttons->addButton(QStringLiteral("Отмена"), QDialogButtonBox::RejectRole);
+    ok->setProperty("primary", true);
+    ok->style()->unpolish(ok);
+    ok->style()->polish(ok);
     for (auto *b : {ok, cancel})
         b->setMinimumHeight(44);
     ok->setDefault(true);

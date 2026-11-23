@@ -206,7 +206,7 @@ void DocumentController::editSelected()
     models::FundFilterProxy *proxy = withdrawnTab ? m_withdrawnProxy : m_proxy;
     const QVector<int> rows = selectedModelRows(table, proxy);
     if (rows.size() != 1) {
-        QMessageBox::information(m_window, QStringLiteral("Редактировать"),
+        QMessageBox::information(m_window, QStringLiteral("Изменить"),
                                  rows.isEmpty() ? QStringLiteral("Сначала щёлкните по строке с книгой, которую нужно изменить.")
                                                 : QStringLiteral("Выбрано несколько строк. Выберите одну книгу."));
         return;

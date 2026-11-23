@@ -67,6 +67,7 @@ private:
     QWidget *createHelpTab();
     QPushButton *createActionButton(const QString &text, const QString &toolTip);
     void updateDocumentActions();
+    void setPrimary(QPushButton *button, bool primary);
 
     QLabel *m_fileLabel = nullptr;
     QLabel *m_unsavedLabel = nullptr;

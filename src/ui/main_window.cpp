@@ -2,8 +2,11 @@
 
 #include "filter_header_view.h"
 #include "fund_table_page.h"
+#include "icons.h"
 
+#include <QFontMetrics>
 #include <QCloseEvent>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
@@ -42,6 +45,7 @@ MainWindow::MainWindow(QWidget *parent)
     resize(1280, 720);
 
     auto *central = new QWidget(this);
+    central->setObjectName(QStringLiteral("central"));
     auto *layout = new QVBoxLayout(central);
     layout->setContentsMargins(12, 12, 12, 8);
     layout->setSpacing(10);
@@ -55,6 +59,7 @@ MainWindow::MainWindow(QWidget *parent)
     // Длинное имя файла сокращается, а надпись о несохранённых изменениях видна всегда.
     m_fileLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     fileRow->addWidget(m_fileLabel, 1);
+    m_unsavedLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
     fileRow->addWidget(m_unsavedLabel);
     layout->addLayout(fileRow);
 
@@ -87,6 +92,7 @@ QPushButton *MainWindow::createActionButton(const QString &text, const QString &
     button->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     button->setToolTip(toolTip);
     button->setCursor(Qt::PointingHandCursor);
+    button->setIconSize(QSize(22, 22));
     return button;
 }
 
@@ -106,11 +112,11 @@ QWidget *MainWindow::createToolbar()
                                   QStringLiteral("Сохранить рабочий файл в другое место под новым именем"));
     m_addBook = createActionButton(QStringLiteral("Добавить книгу"),
                                    QStringLiteral("Открыть форму для новой книги"));
-    m_edit = createActionButton(QStringLiteral("Редактировать"),
+    m_edit = createActionButton(QStringLiteral("Изменить"),
                                 QStringLiteral("Изменить выбранную книгу или экземпляр"));
     m_withdraw = createActionButton(QStringLiteral("Выбытие"),
                                     QStringLiteral("Оформить выбытие отмеченных экземпляров"));
-    m_export = createActionButton(QStringLiteral("Экспорт Excel"),
+    m_export = createActionButton(QStringLiteral("Экспорт"),
                                   QStringLiteral("Сохранить список в новый Excel-файл"));
 
     m_undo = createActionButton(QStringLiteral("Отменить"),
@@ -118,8 +124,32 @@ QWidget *MainWindow::createToolbar()
     m_undo->setShortcut(QKeySequence::Undo);
     m_undo->setEnabled(false);
 
-    for (auto *button : {m_open, m_save, m_saveAs, m_addBook, m_edit, m_undo, m_withdraw, m_export})
-        row->addWidget(button);
+    // Кнопки по группам: файл | книги | выбытие и выгрузка.
+    m_open->setIcon(makeIcon(IconKind::Open));
+    m_save->setIcon(makeIcon(IconKind::Save));
+    m_saveAs->setIcon(makeIcon(IconKind::SaveAs));
+    m_addBook->setIcon(makeIcon(IconKind::Add));
+    m_edit->setIcon(makeIcon(IconKind::Edit));
+    m_undo->setIcon(makeIcon(IconKind::Undo));
+    m_withdraw->setIcon(makeIcon(IconKind::Withdraw, QColor(0xa3, 0x3b, 0x2f)));
+    m_export->setIcon(makeIcon(IconKind::Export));
+    const QList<QList<QPushButton *>> groups{{m_open, m_save, m_saveAs},
+                                             {m_addBook, m_edit, m_undo},
+                                             {m_withdraw, m_export}};
+    for (int g = 0; g < groups.size(); ++g) {
+        if (g > 0) {
+            auto *separator = new QFrame(bar);
+            separator->setObjectName(QStringLiteral("toolbarSeparator"));
+            separator->setFrameShape(QFrame::VLine);
+            separator->setFixedWidth(1);
+            row->addSpacing(6);
+            row->addWidget(separator);
+            row->addSpacing(6);
+        }
+        for (QPushButton *button : groups.at(g))
+            row->addWidget(button);
+    }
+    row->addStretch(1);
 
     connect(m_open, &QPushButton::clicked, this, &MainWindow::openRequested);
     connect(m_save, &QPushButton::clicked, this, &MainWindow::saveRequested);
@@ -143,11 +173,18 @@ QWidget *MainWindow::createSearchRow()
     m_search->setPlaceholderText(QStringLiteral("Поиск: название, автор, инвентарный номер…"));
     m_search->setClearButtonEnabled(true);
     m_search->setMinimumHeight(40);
+    {
+        // В поле ввода значок рисуется мелко (16 px): берём лупу крупнее, без полей вокруг.
+        const QPixmap big = makePixmap(IconKind::Search, 48, QColor(0x6b, 0x77, 0x86), 1.0);
+        QIcon searchIcon(big.copy(6, 6, 38, 38));
+        m_search->addAction(searchIcon, QLineEdit::LeadingPosition);
+    }
     row->addWidget(m_search, 1);
 
     m_resetFilters = createActionButton(QStringLiteral("Сбросить фильтры"),
                                         QStringLiteral("Показать все записи без фильтров и поиска"));
     m_resetFilters->setMinimumHeight(40);
+    m_resetFilters->setIcon(makeIcon(IconKind::ResetFilters));
     row->addWidget(m_resetFilters);
 
     connect(m_search, &QLineEdit::textChanged, this, &MainWindow::searchTextChanged);
@@ -161,20 +198,28 @@ QWidget *MainWindow::createSearchRow()
 QWidget *MainWindow::createBooksTab()
 {
     m_booksPage = new FundTablePage(QStringLiteral(
-        "Здесь появится список книг.\n\nНажмите «Открыть Excel» и выберите файл с книжным фондом."));
+        "Программа сделает рабочую копию файла, ваш исходный файл не изменится."));
+    m_booksPage->setEmptyTitle(QStringLiteral("Откройте Excel-файл с книжным фондом"));
+    auto *open = createActionButton(QStringLiteral("Открыть Excel"), QStringLiteral("Выбрать Excel-файл с фондом"));
+    open->setProperty("primary", true);
+    open->setIcon(makeIcon(IconKind::Open, Qt::white));
+    connect(open, &QPushButton::clicked, this, &MainWindow::openRequested);
+    m_booksPage->setEmptyAction(open);
     return m_booksPage;
 }
 
 QWidget *MainWindow::createWithdrawnTab()
 {
     m_withdrawnPage = new FundTablePage(QStringLiteral(
-        "Здесь будут выбывшие экземпляры.\n\nОткройте файл, выберите экземпляры на вкладке «Книги» "
-        "и нажмите «Выбытие»."));
+        "Откройте файл, выделите экземпляры на вкладке «Книги» и нажмите «Выбытие»."));
+    m_withdrawnPage->setEmptyTitle(QStringLiteral("Здесь будут выбывшие экземпляры"));
     m_restore = createActionButton(QStringLiteral("Вернуть в фонд"),
                                    QStringLiteral("Отменить выбытие выбранных экземпляров: они вернутся на вкладку «Книги»"));
     m_report = createActionButton(QStringLiteral("Сформировать Excel"),
                                   QStringLiteral("Сохранить список выбывших в новый Excel-файл (отчёт). "
                                                  "Если выбраны строки — только их."));
+    m_report->setIcon(makeIcon(IconKind::Report));
+    m_restore->setIcon(makeIcon(IconKind::Restore));
     m_withdrawnPage->addButton(m_report);
     m_withdrawnPage->addButton(m_restore);
     connect(m_restore, &QPushButton::clicked, this, &MainWindow::restoreRequested);
@@ -269,13 +314,30 @@ void MainWindow::setUnsavedChanges(bool unsaved)
 {
     m_unsaved = unsaved;
     // Состояние передаётся словами, а не только цветом.
-    m_unsavedLabel->setText(unsaved ? QStringLiteral("● Есть несохранённые изменения")
+    m_unsavedLabel->setText(unsaved ? QStringLiteral("Есть несохранённые изменения")
                                     : (m_workFileName.isEmpty() ? QString()
                                                                 : QStringLiteral("Все изменения сохранены")));
     m_unsavedLabel->setProperty("unsaved", unsaved);
     m_unsavedLabel->style()->unpolish(m_unsavedLabel);
     m_unsavedLabel->style()->polish(m_unsavedLabel);
+    // Подпись в плашке жирная: ширину считаем по жирному шрифту, иначе текст обрезается.
+    QFont bold = m_unsavedLabel->font();
+    bold.setBold(true);
+    m_unsavedLabel->setMinimumWidth(QFontMetrics(bold).horizontalAdvance(m_unsavedLabel->text()) + 32);
+    m_unsavedLabel->updateGeometry();
     updateDocumentActions();
+}
+
+void MainWindow::setPrimary(QPushButton *button, bool primary)
+{
+    if (button->property("primary").toBool() == primary)
+        return;
+    button->setProperty("primary", primary);
+    const bool open = button == m_open;
+    button->setIcon(makeIcon(open ? IconKind::Open : IconKind::Save,
+                             primary ? QColor(Qt::white) : QColor(0x2f, 0x3b, 0x4c)));
+    button->style()->unpolish(button);
+    button->style()->polish(button);
 }
 
 void MainWindow::updateDocumentActions()
@@ -285,6 +347,9 @@ void MainWindow::updateDocumentActions()
         button->setEnabled(hasDocument);
     m_save->setEnabled(hasDocument && m_unsaved);
     m_search->setEnabled(hasDocument);
+    // Главная кнопка — цветом: без файла «Открыть Excel», с изменениями «Сохранить».
+    setPrimary(m_open, !hasDocument);
+    setPrimary(m_save, hasDocument && m_unsaved);
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

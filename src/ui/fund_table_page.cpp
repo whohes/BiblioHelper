@@ -1,6 +1,7 @@
 #include "fund_table_page.h"
 
 #include "filter_header_view.h"
+#include "icons.h"
 
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -15,12 +16,29 @@ namespace bh::ui {
 FundTablePage::FundTablePage(const QString &emptyText, QWidget *parent)
     : QStackedWidget(parent)
 {
-    m_message = new QLabel(emptyText, this);
+    m_empty = new QWidget(this);
+    m_empty->setObjectName(QStringLiteral("emptyPage"));
+    m_emptyLayout = new QVBoxLayout(m_empty);
+    m_emptyLayout->setSpacing(14);
+    m_emptyLayout->addStretch(2);
+    auto *picture = new QLabel(m_empty);
+    picture->setAlignment(Qt::AlignCenter);
+    picture->setPixmap(makePixmap(IconKind::Book, 72, QColor(0x9a, 0xb3, 0xd1), devicePixelRatioF()));
+    m_emptyLayout->addWidget(picture);
+    m_title = new QLabel(m_empty);
+    m_title->setObjectName(QStringLiteral("emptyTitle"));
+    m_title->setAlignment(Qt::AlignCenter);
+    m_title->setWordWrap(true);
+    m_title->hide();
+    m_emptyLayout->addWidget(m_title);
+    m_message = new QLabel(emptyText, m_empty);
     m_message->setAlignment(Qt::AlignCenter);
     m_message->setWordWrap(true);
     m_message->setObjectName(QStringLiteral("emptyState"));
     m_message->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    addWidget(m_message);
+    m_emptyLayout->addWidget(m_message);
+    m_emptyLayout->addStretch(3);
+    addWidget(m_empty);
 
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
@@ -49,6 +67,7 @@ FundTablePage::FundTablePage(const QString &emptyText, QWidget *parent)
 
     m_count = new QLabel(page);
     m_count->setObjectName(QStringLiteral("countLabel"));
+    m_count->setObjectName(QStringLiteral("countLabel"));
     m_count->setWordWrap(true);
     layout->addWidget(m_count);
 
@@ -63,8 +82,27 @@ void FundTablePage::addButton(QPushButton *button)
 
 void FundTablePage::setMessage(const QString &text)
 {
+    // Сообщение после открытия файла (например, «список книг не найден») —
+    // без заголовка пустого экрана.
+    m_title->hide();
     m_message->setText(text);
     setCurrentIndex(0);
+}
+
+void FundTablePage::setEmptyTitle(const QString &title)
+{
+    m_title->setText(title);
+    m_title->setVisible(!title.isEmpty());
+}
+
+void FundTablePage::setEmptyAction(QPushButton *button)
+{
+    auto *row = new QHBoxLayout;
+    row->addStretch(1);
+    row->addWidget(button);
+    row->addStretch(1);
+    // Перед нижним растягивающим промежутком.
+    m_emptyLayout->insertLayout(m_emptyLayout->count() - 1, row);
 }
 
 void FundTablePage::showTable(QAbstractItemModel *model)
