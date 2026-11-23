@@ -3,6 +3,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariant>
+#include <QVector>
 
 #include <memory>
 
@@ -13,6 +14,19 @@ class XLDocument;
 }
 
 namespace bh::io {
+
+// Одна непустая строка листа: номер строки Excel и значения столбцов 1..N.
+struct SheetRow
+{
+    int row = 0;
+    QVector<QVariant> values;
+};
+
+struct SheetSize
+{
+    int rows = 0;
+    int columns = 0;
+};
 
 // Тонкая обёртка над OpenXLSX для рабочей копии XLSX.
 //
@@ -46,6 +60,14 @@ public:
     // Значение ячейки: пусто, bool, qint64, double или QString.
     // Для формулы возвращается последнее вычисленное значение.
     QVariant cellValue(const QString &sheet, int row, int column) const;
+    // Размер занятой области листа.
+    SheetSize sheetSize(const QString &sheet) const;
+
+    // Непустые строки firstRow..lastRow, столбцы 1..columnCount.
+    // Ничего не меняет в файле (пустые строки и ячейки не создаются).
+    QVector<SheetRow> readRows(const QString &sheet, int firstRow, int lastRow, int columnCount,
+                               QString *error = nullptr) const;
+
     bool cellHasFormula(const QString &sheet, int row, int column) const;
     QString cellFormula(const QString &sheet, int row, int column) const;
 

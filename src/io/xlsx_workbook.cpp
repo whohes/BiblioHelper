@@ -7,6 +7,7 @@
 #include <QSaveFile>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <exception>
 
 #ifdef Q_OS_WIN
@@ -76,6 +77,24 @@ bool copyFile(const QString &from, const QString &to, QString *error)
         return false;
     }
     return true;
+}
+
+QVariant toVariant(OpenXLSX::XLCellValue value)
+{
+    switch (value.type()) {
+    case OpenXLSX::XLValueType::Empty:
+        return {};
+    case OpenXLSX::XLValueType::Boolean:
+        return value.get<bool>();
+    case OpenXLSX::XLValueType::Integer:
+        return static_cast<qint64>(value.get<int64_t>());
+    case OpenXLSX::XLValueType::Float:
+        return value.get<double>();
+    case OpenXLSX::XLValueType::String:
+    case OpenXLSX::XLValueType::Error:
+        return fromUtf8(value.getString());
+    }
+    return {};
 }
 
 bool validCoordinates(int row, int column)
@@ -186,24 +205,68 @@ QVariant XlsxWorkbook::cellValue(const QString &sheet, int row, int column) cons
         return {};
     try {
         auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
-        OpenXLSX::XLCellValue value =
-            ws.cell(static_cast<uint32_t>(row), static_cast<uint16_t>(column)).value();
-        switch (value.type()) {
-        case OpenXLSX::XLValueType::Empty:
+        // findCell не создаёт строку/ячейку в XML, если её нет: чтение
+        // не должно менять файл.
+        auto cell = ws.findCell(static_cast<uint32_t>(row), static_cast<uint16_t>(column));
+        if (cell.empty())
             return {};
-        case OpenXLSX::XLValueType::Boolean:
-            return value.get<bool>();
-        case OpenXLSX::XLValueType::Integer:
-            return static_cast<qint64>(value.get<int64_t>());
-        case OpenXLSX::XLValueType::Float:
-            return value.get<double>();
-        case OpenXLSX::XLValueType::String:
-        case OpenXLSX::XLValueType::Error:
-            return fromUtf8(value.getString());
-        }
+        return toVariant(cell.value());
     } catch (const std::exception &) {
     }
     return {};
+}
+
+SheetSize XlsxWorkbook::sheetSize(const QString &sheet) const
+{
+    if (!isOpen())
+        return {};
+    try {
+        auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
+        return {static_cast<int>(ws.rowCount()), static_cast<int>(ws.columnCount())};
+    } catch (const std::exception &) {
+        return {};
+    }
+}
+
+QVector<SheetRow> XlsxWorkbook::readRows(const QString &sheet, int firstRow, int lastRow,
+                                         int columnCount, QString *error) const
+{
+    QVector<SheetRow> result;
+    if (!isOpen()) {
+        setError(error, QStringLiteral("Файл не открыт"));
+        return result;
+    }
+    if (firstRow < 1 || lastRow < firstRow || columnCount < 1)
+        return result;
+    lastRow = std::min(lastRow, 1048576);
+    columnCount = std::min(columnCount, 16384);
+    try {
+        auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
+        auto range = ws.rows(static_cast<uint32_t>(firstRow), static_cast<uint32_t>(lastRow));
+        for (auto it = range.begin(); it != range.end(); ++it) {
+            // Проверка до разыменования: иначе OpenXLSX создаст пустую строку.
+            if (!it.rowExists())
+                continue;
+            auto &row = *it;
+            SheetRow out;
+            out.row = static_cast<int>(row.rowNumber());
+            out.values.resize(columnCount);
+            bool any = false;
+            for (int c = 1; c <= columnCount; ++c) {
+                auto cell = row.findCell(static_cast<uint16_t>(c));
+                if (cell.empty())
+                    continue;
+                out.values[c - 1] = toVariant(cell.value());
+                any = any || out.values[c - 1].isValid();
+            }
+            if (any)
+                result.push_back(std::move(out));
+        }
+    } catch (const std::exception &e) {
+        setError(error, QStringLiteral("Не удалось прочитать лист «%1»: %2").arg(sheet, fromUtf8(e.what())));
+        result.clear();
+    }
+    return result;
 }
 
 bool XlsxWorkbook::cellHasFormula(const QString &sheet, int row, int column) const
@@ -212,7 +275,8 @@ bool XlsxWorkbook::cellHasFormula(const QString &sheet, int row, int column) con
         return false;
     try {
         auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
-        return ws.cell(static_cast<uint32_t>(row), static_cast<uint16_t>(column)).hasFormula();
+        auto cell = ws.findCell(static_cast<uint32_t>(row), static_cast<uint16_t>(column));
+        return !cell.empty() && cell.hasFormula();
     } catch (const std::exception &) {
         return false;
     }
@@ -224,8 +288,8 @@ QString XlsxWorkbook::cellFormula(const QString &sheet, int row, int column) con
         return {};
     try {
         auto ws = m_doc->workbook().worksheet(toUtf8(sheet));
-        return fromUtf8(
-            ws.cell(static_cast<uint32_t>(row), static_cast<uint16_t>(column)).formula().get());
+        auto cell = ws.findCell(static_cast<uint32_t>(row), static_cast<uint16_t>(column));
+        return cell.empty() ? QString() : fromUtf8(cell.formula().get());
     } catch (const std::exception &) {
         return {};
     }

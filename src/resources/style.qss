@@ -35,3 +35,29 @@ QTabBar::tab:selected { background: #ffffff; font-weight: bold; }
 QLabel#fileLabel { font-weight: bold; }
 QLabel#unsavedLabel[unsaved="true"] { color: #8a4b00; font-weight: bold; }
 QLabel#emptyState { color: #555555; }
+
+QTableView {
+    background: #ffffff;
+    alternate-background-color: #f3f6fa;
+    gridline-color: #d6d6d6;
+    selection-background-color: #cfe0f7;
+    selection-color: #1f1f1f;
+    border: 1px solid #9a9a9a;
+}
+QHeaderView::section {
+    background: #ececea;
+    border: none;
+    border-bottom: 1px solid #c8c8c8;
+    padding: 4px 6px;
+    font-weight: bold;
+}
+QHeaderView::section:vertical {
+    font-weight: normal;
+    color: #6a6a6a;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 0 6px;
+}
+QLabel#countLabel { color: #333333; }
+QLabel#countLabel[filtered="true"] { color: #8a4b00; font-weight: bold; }
+QListView::indicator, QCheckBox::indicator { width: 20px; height: 20px; }
+QListView::item { padding: 3px 2px; }

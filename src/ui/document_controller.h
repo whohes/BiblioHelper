@@ -2,8 +2,11 @@
 
 #include "core/work_copy.h"
 #include "io/xlsx_workbook.h"
+#include "models/fund_filter_proxy.h"
+#include "models/fund_table_model.h"
 
 #include <QObject>
+#include <QTimer>
 
 namespace bh::ui {
 
@@ -25,6 +28,9 @@ private slots:
     void open();
     void save();
     void saveAs();
+    void showColumnFilter(int column, const QPoint &globalPos);
+    void updateCounts();
+    void fitColumns();
 
 private:
     bool confirmDiscardChanges();
@@ -35,6 +41,11 @@ private:
     io::XlsxWorkbook m_workbook;
     QString m_originalPath;
     QString m_workPath;
+
+    models::FundTableModel *m_model;
+    models::FundFilterProxy *m_proxy;
+    QTimer m_searchTimer;  // поиск запускается после паузы в наборе
+    QString m_pendingSearch;
 };
 
 } // namespace bh::ui

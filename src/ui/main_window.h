@@ -2,12 +2,18 @@
 
 #include <QMainWindow>
 
+class QAbstractItemModel;
+
 class QLabel;
+class QStackedWidget;
+class QTableView;
 class QLineEdit;
 class QPushButton;
 class QTabWidget;
 
 namespace bh::ui {
+
+class FilterHeaderView;
 
 // Главное окно: крупные кнопки с подписями, вкладки и строка состояния.
 // Кнопки работы с документом включаются, когда открыт рабочий файл.
@@ -23,8 +29,14 @@ public:
     void setUnsavedChanges(bool unsaved);
     bool hasUnsavedChanges() const { return m_unsaved; }
 
-    // Текст на вкладке «Книги», пока нет таблицы.
+    // Текст на вкладке «Книги» вместо таблицы (файл не открыт или ошибка).
     void setBooksMessage(const QString &text);
+    // Показать таблицу книг с данной моделью.
+    void showBooksTable(QAbstractItemModel *model);
+    QTableView *booksTable() const { return m_booksTable; }
+    FilterHeaderView *booksHeader() const { return m_booksHeader; }
+    // «Показано 120 из 3138 экземпляров».
+    void setRecordCount(int shown, int total, bool filtered);
 
 signals:
     void openRequested();
@@ -55,6 +67,10 @@ private:
     QLineEdit *m_search = nullptr;
     QTabWidget *m_tabs = nullptr;
     QLabel *m_booksMessage = nullptr;
+    QStackedWidget *m_booksStack = nullptr;
+    QTableView *m_booksTable = nullptr;
+    FilterHeaderView *m_booksHeader = nullptr;
+    QLabel *m_countLabel = nullptr;
 
     QPushButton *m_open = nullptr;
     QPushButton *m_save = nullptr;
