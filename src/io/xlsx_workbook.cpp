@@ -2,7 +2,16 @@
 
 #include <OpenXLSX.hpp>
 
+#include <QDir>
+#include <QFile>
+#include <QSaveFile>
+#include <QTemporaryDir>
+
 #include <exception>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 namespace bh::io {
 
@@ -25,6 +34,50 @@ void setError(QString *error, const QString &message)
         *error = message;
 }
 
+bool isAsciiPath(const QString &path)
+{
+    for (const QChar c : path) {
+        if (c.unicode() > 0x7e)
+            return false;
+    }
+    return !path.isEmpty();
+}
+
+// Короткое имя Windows (C:\Users\D8F3~1\...) не содержит русских букв.
+QString shortPath(const QString &path)
+{
+#ifdef Q_OS_WIN
+    const std::wstring wide = QDir::toNativeSeparators(path).toStdWString();
+    wchar_t buffer[MAX_PATH];
+    const DWORD length = GetShortPathNameW(wide.c_str(), buffer, MAX_PATH);
+    if (length > 0 && length < MAX_PATH)
+        return QDir::fromNativeSeparators(QString::fromWCharArray(buffer, static_cast<int>(length)));
+#else
+    Q_UNUSED(path);
+#endif
+    return {};
+}
+
+bool copyFile(const QString &from, const QString &to, QString *error)
+{
+    QFile source(from);
+    if (!source.open(QIODevice::ReadOnly)) {
+        setError(error, QStringLiteral("Не удалось прочитать файл «%1»: %2")
+                            .arg(QDir::toNativeSeparators(from), source.errorString()));
+        return false;
+    }
+    // QSaveFile пишет во временный файл и подменяет целевой только после
+    // успешной записи: при сбое прежний файл остаётся целым.
+    QSaveFile target(to);
+    if (!target.open(QIODevice::WriteOnly) || target.write(source.readAll()) != source.size()
+        || !target.commit()) {
+        setError(error, QStringLiteral("Не удалось записать файл «%1»: %2")
+                            .arg(QDir::toNativeSeparators(to), target.errorString()));
+        return false;
+    }
+    return true;
+}
+
 bool validCoordinates(int row, int column)
 {
     // Ограничения формата XLSX.
@@ -40,31 +93,76 @@ XlsxWorkbook::~XlsxWorkbook()
     close();
 }
 
+QString XlsxWorkbook::stagingRoot()
+{
+    QStringList candidates{QDir::tempPath()};
+    const QString temp = shortPath(QDir::tempPath());
+    if (!temp.isEmpty())
+        candidates << temp;
+    const QString programData = qEnvironmentVariable("ProgramData");
+    if (!programData.isEmpty())
+        candidates << programData + QStringLiteral("/BiblioHelper/tmp");
+
+    for (const QString &dir : candidates) {
+        if (isAsciiPath(dir) && QDir().mkpath(dir))
+            return dir;
+    }
+    return {};
+}
+
+QString XlsxWorkbook::nextStagedPath()
+{
+    return m_staging->filePath(QStringLiteral("work%1.xlsx").arg(++m_stagedCount));
+}
+
 bool XlsxWorkbook::open(const QString &path, QString *error)
 {
     close();
+    const QString root = stagingRoot();
+    if (root.isEmpty()) {
+        setError(error, QStringLiteral("Не найдена служебная папка для работы с файлом "
+                                       "(во временной папке Windows есть русские буквы)."));
+        return false;
+    }
+    auto staging = std::make_unique<QTemporaryDir>(root + QStringLiteral("/bh-XXXXXX"));
+    if (!staging->isValid()) {
+        setError(error, QStringLiteral("Не удалось создать служебную папку в «%1»")
+                            .arg(QDir::toNativeSeparators(root)));
+        return false;
+    }
+    m_staging = std::move(staging);
+    m_stagedCount = 0;
+
+    const QString staged = nextStagedPath();
+    if (!copyFile(path, staged, error)) {
+        m_staging.reset();
+        return false;
+    }
     try {
         auto doc = std::make_unique<OpenXLSX::XLDocument>();
-        doc->open(toUtf8(path));
+        doc->open(toUtf8(QDir::toNativeSeparators(staged)));
         m_doc = std::move(doc);
         return true;
     } catch (const std::exception &e) {
         setError(error, QStringLiteral("Не удалось открыть файл: %1").arg(fromUtf8(e.what())));
+        m_staging.reset();
         return false;
     }
 }
 
 void XlsxWorkbook::close()
 {
-    if (!m_doc)
-        return;
-    try {
-        if (m_doc->isOpen())
-            m_doc->close();
-    } catch (const std::exception &) {
-        // Закрытие без сохранения: ошибки здесь не влияют на данные.
+    if (m_doc) {
+        try {
+            if (m_doc->isOpen())
+                m_doc->close();
+        } catch (const std::exception &) {
+            // Закрытие без сохранения: ошибки здесь не влияют на данные.
+        }
+        m_doc.reset();
     }
-    m_doc.reset();
+    // Служебная папка удаляется только после закрытия документа.
+    m_staging.reset();
 }
 
 bool XlsxWorkbook::isOpen() const
@@ -210,9 +308,12 @@ bool XlsxWorkbook::saveAs(const QString &path, QString *error)
         setError(error, QStringLiteral("Файл не открыт"));
         return false;
     }
+    // Сначала OpenXLSX сохраняет в служебную папку (латинский путь),
+    // затем готовый файл копируется на место через Qt.
+    const QString staged = nextStagedPath();
     try {
-        m_doc->saveAs(toUtf8(path), true);
-        return true;
+        m_doc->saveAs(toUtf8(QDir::toNativeSeparators(staged)), true);
+        return copyFile(staged, path, error);
     } catch (const std::exception &e) {
         setError(error, QStringLiteral("Не удалось сохранить файл: %1").arg(fromUtf8(e.what())));
         return false;

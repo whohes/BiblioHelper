@@ -54,7 +54,7 @@ jobs:
           Get-Command libstdc++-6.dll, libgcc_s_dw2-1.dll, Qt5Core.dll -All -ErrorAction SilentlyContinue | Format-Table Source
           & build\tests\test_xlsx_roundtrip.exe -v1
           "Код выхода: 0x{0:X8}" -f $LASTEXITCODE
-          gdb -batch -ex "set pagination off" -ex "catch throw" -ex run -ex bt -ex continue -ex bt --args build\tests\test_xlsx_roundtrip.exe -v1
+          gdb -batch -ex run -ex bt --args build\tests\test_xlsx_roundtrip.exe -v1
 
       - name: Собрать папку с программой
         shell: pwsh
