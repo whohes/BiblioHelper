@@ -16,7 +16,7 @@ FilterHeaderView::FilterHeaderView(QWidget *parent)
     setSortIndicatorShown(true);
     setHighlightSections(false);
     setMouseTracking(true);
-    setDefaultAlignment(Qt::Alignment(Qt::AlignCenter | Qt::TextWordWrap));
+    setDefaultAlignment(Qt::AlignCenter);
 }
 
 void FilterHeaderView::setFilteredColumns(const QList<int> &columns)
