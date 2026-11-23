@@ -1,3 +1,4 @@
+#include "core/app_settings.h"
 #include "ui/document_controller.h"
 #include "ui/main_window.h"
 
@@ -14,8 +15,14 @@ int main(int argc, char *argv[])
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
 #endif
 
-    QApplication app(argc, argv);
+    // Имена нужны до QApplication: по ним читаются настройки (масштаб интерфейса).
     QApplication::setApplicationName(QStringLiteral("BiblioHelper"));
+    QApplication::setOrganizationName(QStringLiteral("BiblioHelper"));
+    const int scale = bh::core::AppSettings::interfaceScale();
+    if (scale != 100 && qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR"))
+        qputenv("QT_SCALE_FACTOR", QByteArray::number(scale / 100.0));
+
+    QApplication app(argc, argv);
     QApplication::setApplicationDisplayName(QStringLiteral("Учёт книжного фонда"));
     QApplication::setApplicationVersion(QStringLiteral(BIBLIOHELPER_VERSION));
     QApplication::setOrganizationName(QStringLiteral("BiblioHelper"));

@@ -14,6 +14,9 @@
 #include "withdraw_dialog.h"
 #include "export_dialog.h"
 #include "book_groups_dialog.h"
+#include "problem_report_dialog.h"
+#include "settings_dialog.h"
+#include "core/app_settings.h"
 #include "core/book_groups.h"
 #include "core/fund_export.h"
 #include "io/xlsx_font_colors.h"
@@ -22,6 +25,7 @@
 
 #include <QCheckBox>
 #include <QCursor>
+#include <QSysInfo>
 #include <QDesktopServices>
 #include <QDir>
 #include <QUrl>
@@ -44,7 +48,6 @@ namespace {
 const QString kLastDirKey = QStringLiteral("files/lastDirectory");
 const QString kExportDirKey = QStringLiteral("files/exportDirectory");
 // Сколько автоматических копий «перед сохранением» хранить.
-constexpr int kKeepSaveBackups = 20;
 
 bool samePath(const QString &a, const QString &b)
 {
@@ -128,6 +131,8 @@ DocumentController::DocumentController(MainWindow *window)
         refreshLog();
     });
     connect(window, &MainWindow::openLogFolderRequested, this, &DocumentController::openLogFolder);
+    connect(window, &MainWindow::settingsRequested, this, &DocumentController::showSettings);
+    connect(window, &MainWindow::reportProblemRequested, this, &DocumentController::reportProblem);
     connect(window, &MainWindow::findBooksRequested, this, [this] { findBooks(); });
     connect(window, &MainWindow::mergeBooksRequested, this, &DocumentController::mergeSelectedBooks);
     connect(window, &MainWindow::splitBooksRequested, this, &DocumentController::splitSelectedBooks);
@@ -297,6 +302,32 @@ void DocumentController::undo()
     m_model->undo();
     log(QStringLiteral("undo"), text);
     m_window->statusBar()->showMessage(QStringLiteral("Последнее изменение отменено"), 5000);
+}
+
+void DocumentController::showSettings()
+{
+    SettingsDialog dialog(m_window);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const bool restart = dialog.apply();
+    m_log = core::ActionLog();  // папка программы могла смениться
+    m_workCopies = core::WorkCopies();
+    if (restart) {
+        QMessageBox::information(m_window, QStringLiteral("Настройки"),
+                                 QStringLiteral("Новый размер интерфейса появится после перезапуска программы."));
+    }
+    m_window->statusBar()->showMessage(QStringLiteral("Настройки сохранены"), 5000);
+}
+
+void DocumentController::reportProblem()
+{
+    core::ProblemReport report;
+    report.appVersion = QApplication::applicationVersion();
+    report.system = QStringLiteral("%1 (%2)").arg(QSysInfo::prettyProductName(), QSysInfo::currentCpuArchitecture());
+    report.fund = m_originalPath.isEmpty() ? QString() : QFileInfo(m_originalPath).fileName();
+    report.log = m_log.read(20);
+    ProblemReportDialog dialog(report, m_window);
+    dialog.exec();
 }
 
 void DocumentController::findBooks(bool afterImport)
@@ -834,7 +865,8 @@ bool DocumentController::openFile(const QString &path)
     }
     if (imported && m_model->rowCount() > 0) {
         finishImport(withdrawnMarks);
-        findBooks(true);
+        if (core::AppSettings::offerBookGroupsAfterImport())
+            findBooks(true);
     }
     return true;
 }
@@ -963,7 +995,7 @@ void DocumentController::save()
                 .isEmpty())
             backupWarning = QStringLiteral(" Резервная копия не сделана: %1").arg(backupError);
         else
-            core::WorkCopies::pruneBackups(m_workPath, kKeepSaveBackups);
+            core::WorkCopies::pruneBackups(m_workPath, core::AppSettings::keepSaveBackups());
     }
     if (!m_model->writeChanges(m_workbook, &error) || !m_workbook.saveAs(m_workPath, &error)) {
         showError(QStringLiteral("Не удалось сохранить"),
