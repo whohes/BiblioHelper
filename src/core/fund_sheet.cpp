@@ -38,9 +38,9 @@ QString colorMarkLabel(const QString &colorName)
 {
     if (colorName.isEmpty())
         return {};
-    if (colorName == QLatin1String("Красный"))
+    if (colorName == QStringLiteral("Красный"))
         return QStringLiteral("Ветхая");
-    if (colorName == QLatin1String("Синий"))
+    if (colorName == QStringLiteral("Синий"))
         return QStringLiteral("Устаревшая");
     return colorName + QStringLiteral(" шрифт");
 }
