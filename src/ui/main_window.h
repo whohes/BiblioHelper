@@ -10,8 +10,7 @@ class QTabWidget;
 namespace bh::ui {
 
 // Главное окно: крупные кнопки с подписями, вкладки и строка состояния.
-// На этапе каркаса кнопки ещё не подключены к данным; они включаются,
-// когда открыт рабочий файл.
+// Кнопки работы с документом включаются, когда открыт рабочий файл.
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -23,6 +22,9 @@ public:
     void setWorkFileName(const QString &fileName);
     void setUnsavedChanges(bool unsaved);
     bool hasUnsavedChanges() const { return m_unsaved; }
+
+    // Текст на вкладке «Книги», пока нет таблицы.
+    void setBooksMessage(const QString &text);
 
 signals:
     void openRequested();
@@ -52,6 +54,7 @@ private:
     QLabel *m_unsavedLabel = nullptr;
     QLineEdit *m_search = nullptr;
     QTabWidget *m_tabs = nullptr;
+    QLabel *m_booksMessage = nullptr;
 
     QPushButton *m_open = nullptr;
     QPushButton *m_save = nullptr;

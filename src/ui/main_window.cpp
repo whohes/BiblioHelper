@@ -142,8 +142,15 @@ QWidget *MainWindow::createSearchRow()
 
 QWidget *MainWindow::createBooksTab()
 {
-    return createEmptyState(QStringLiteral(
+    m_booksMessage = createEmptyState(QStringLiteral(
         "Здесь появится список книг.\n\nНажмите «Открыть Excel» и выберите файл с книжным фондом."));
+    m_booksMessage->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    return m_booksMessage;
+}
+
+void MainWindow::setBooksMessage(const QString &text)
+{
+    m_booksMessage->setText(text);
 }
 
 QWidget *MainWindow::createWithdrawnTab()
@@ -165,7 +172,7 @@ QWidget *MainWindow::createHelpTab()
     help->setHtml(QStringLiteral(
         "<h2>Начало работы</h2>"
         "<p>1. Нажмите <b>«Открыть Excel»</b> и выберите файл с книжным фондом.</p>"
-        "<p>2. Программа сделает <b>рабочую копию</b> файла в своей папке. "
+        "<p>2. Программа сделает <b>рабочую копию</b> файла в папке «Документы\\BiblioHelper\\Рабочие файлы». "
         "Ваш исходный файл останется без изменений.</p>"
         "<p>3. Все изменения попадают в рабочую копию после нажатия <b>«Сохранить»</b>.</p>"
         "<p>Подробная справка появится в следующих версиях программы.</p>"));
