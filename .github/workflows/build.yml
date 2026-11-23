@@ -63,8 +63,10 @@ jobs:
           Copy-Item build\src\BiblioHelper.exe dist\
           # Явный путь: в PATH раннера есть и другие qmake/windeployqt.
           $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
-          & (Join-Path $qtBin 'qmake.exe') -query QT_INSTALL_PLUGINS
-          & (Join-Path $qtBin 'windeployqt.exe') --release --no-translations --compiler-runtime dist\BiblioHelper.exe
+          Get-ChildItem (Join-Path $env:QT_ROOT_DIR 'plugins\platforms') | Select-Object -ExpandProperty Name
+          # Без --release: windeployqt 5.15 для MinGW сам определяет тип сборки,
+          # а с этим флагом может не найти platforms\qwindows.dll.
+          & (Join-Path $qtBin 'windeployqt.exe') --no-translations --compiler-runtime dist\BiblioHelper.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Test-Path dist\platforms\qwindows.dll)) { throw 'Нет platforms\qwindows.dll' }
 
