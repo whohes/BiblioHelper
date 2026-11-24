@@ -155,7 +155,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Установить Qt 5
-        run: sudo apt-get update && sudo apt-get install -y qtbase5-dev qtbase5-private-dev
+        # Раньше шаг шёл ~17 минут: почти всё время уходило на перестройку
+        # справочника man-db после установки пакетов. Отключаем её и лишние пакеты.
+        run: |
+          echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends qtbase5-dev qtbase5-private-dev
       - name: Собрать
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
