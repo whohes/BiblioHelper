@@ -26,9 +26,38 @@ jobs:
           host: windows
           target: desktop
           arch: win32_mingw81
-          # OpenSSL 1.1.1 — для HTTPS (проверка обновлений), Qt 5.15 сам его не содержит.
-          tools: 'tools_mingw,qt.tools.win32_mingw810 tools_openssl_x86,qt.tools.openssl.win_x86'
+          tools: 'tools_mingw,qt.tools.win32_mingw810'
           cache: true
+
+      # OpenSSL 1.1.1 (32 бита) — для HTTPS (проверка обновлений); Qt 5.15 сам его не содержит.
+      - name: Скачать OpenSSL 1.1.1 (32 бита)
+        shell: pwsh
+        run: |
+          $out = 'C:\openssl-qt'
+          $list = python -m aqt list-tool windows desktop
+          $list
+          $candidates = @($list | Where-Object { $_ -match 'openssl' -and $_ -notmatch 'v3' -and $_ -match 'x86|win32' })
+          foreach ($tool in $candidates) {
+            python -m aqt list-tool windows desktop $tool
+            python -m aqt install-tool windows desktop $tool --outputdir $out
+          }
+          $dll = Get-ChildItem $out -Recurse -Filter libssl-1_1.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) {
+            # Запасной путь: последняя сборка OpenSSL 1.1.1 из архива MSYS2 (mingw32).
+            $idx = (Invoke-WebRequest -UseBasicParsing https://repo.msys2.org/mingw/mingw32/).Content
+            $name = [regex]::Matches($idx, 'mingw-w64-i686-openssl-1\.1\.1[^"<>]*?\.pkg\.tar\.(zst|xz)(?=")') |
+              ForEach-Object Value | Select-Object -Last 1
+            "MSYS2: $name"
+            if ($name) {
+              New-Item -ItemType Directory -Force "$out\msys2" | Out-Null
+              Invoke-WebRequest -UseBasicParsing "https://repo.msys2.org/mingw/mingw32/$name" -OutFile "$out\$name"
+              & C:\msys64\usr\bin\tar.exe -xf "/c/openssl-qt/$name" -C /c/openssl-qt/msys2
+              $dll = Get-ChildItem $out -Recurse -Filter libssl-1_1.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+          }
+          if (-not $dll) { throw 'Не найден libssl-1_1.dll (32 бита)' }
+          "OPENSSL_BIN=$($dll.DirectoryName)" >> $env:GITHUB_ENV
+          Get-ChildItem $dll.DirectoryName
 
       - name: Подключить компилятор MinGW 8.1 (32 бита)
         shell: pwsh
@@ -76,7 +105,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Test-Path dist\platforms\qwindows.dll)) { throw 'Нет platforms\qwindows.dll' }
           # OpenSSL для HTTPS: Qt ищет эти DLL рядом с программой.
-          $ssl = Join-Path $env:IQTA_TOOLS 'OpenSSL\Win_x86\bin'
+          $ssl = $env:OPENSSL_BIN
           Get-ChildItem $ssl
           Copy-Item (Join-Path $ssl 'libssl-1_1.dll'), (Join-Path $ssl 'libcrypto-1_1.dll') dist\
           # Программа сама проверяет, что HTTPS доступен (код выхода 0).
