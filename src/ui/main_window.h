@@ -50,6 +50,8 @@ public:
     // Журнал действий на вкладке «Журнал»; fund — чей журнал показан (пусто — всех фондов).
     void setLog(const QVector<core::LogEntry> &entries, const QString &fund);
     bool isLogTabActive() const;
+    // Вкладка «Справка» (F1).
+    void showHelp();
 
 signals:
     void openRequested();
@@ -76,6 +78,8 @@ signals:
     void mergeBooksRequested();
     void splitBooksRequested();
     void expandAllBooksToggled(bool expand);
+    void settingsRequested();
+    void reportProblemRequested();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -121,6 +125,7 @@ private:
     QLabel *m_versionsEmpty = nullptr;
     QVector<core::WorkCopies::BackupInfo> m_versionList;
     QWidget *m_logTab = nullptr;
+    QWidget *m_helpTab = nullptr;
     QTableWidget *m_log = nullptr;
     QCheckBox *m_logCurrentOnly = nullptr;
     QLabel *m_logEmpty = nullptr;

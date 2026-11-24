@@ -1,6 +1,8 @@
 // Этап 7: экспорт и прошлые версии (резервные копии).
 
 #include "core/action_log.h"
+#include "core/app_settings.h"
+#include "core/problem_report.h"
 #include "core/fund_export.h"
 #include "core/fund_sheet.h"
 #include "core/work_copy.h"
@@ -32,6 +34,8 @@ private slots:
     void csv();
     void backupsListAndPrune();
     void actionLog();
+    void problemReport();
+    void settings();
 
 private:
     static QString dataPath(const QString &name)
@@ -44,6 +48,7 @@ private:
 void ExportTest::initTestCase()
 {
     QStandardPaths::setTestModeEnabled(true);
+    QCoreApplication::setOrganizationName(QStringLiteral("BiblioHelperTest"));
     XlsxWorkbook wb;
     QString error;
     QVERIFY2(wb.open(dataPath(QStringLiteral("fund_bogdanovka_2025.xlsx")), &error), qPrintable(error));
@@ -211,6 +216,65 @@ void ExportTest::actionLog()
     QCOMPARE(log.read().size(), 1);
     const QStringList files = QDir(QFileInfo(path).absolutePath()).entryList({QStringLiteral("*.jsonl")}, QDir::Files);
     QCOMPARE(files.size(), 2);
+}
+
+void ExportTest::problemReport()
+{
+    bh::core::ProblemReport report;
+    report.description = QStringLiteral("Не сохраняется & пишет «файл занят» + 100%");
+    report.appVersion = QStringLiteral("0.1.0");
+    report.system = QStringLiteral("Windows 7 SP 1");
+    report.fund = QStringLiteral("Фонд А.xlsx");
+    for (int i = 0; i < 30; ++i) {
+        bh::core::LogEntry e;
+        e.time = QDateTime(QDate(2026, 11, 23), QTime(10, i));
+        e.action = QStringLiteral("edit");
+        e.details = QString(200, QLatin1Char('x'));
+        e.count = 1;
+        report.log.push_back(e);
+    }
+    const QString body = report.body();
+    QVERIFY(body.startsWith(report.description));
+    QVERIFY(body.contains(QStringLiteral("BiblioHelper 0.1.0")));
+    QVERIFY(body.contains(QStringLiteral("Фонд А.xlsx")));
+    QCOMPARE(body.count(QStringLiteral("Изменение")), 20);  // не больше 20 записей журнала
+
+    const QUrl url = report.mailto(QStringLiteral("bibliohelpers@gmail.com"), 1800);
+    QCOMPARE(url.scheme(), QStringLiteral("mailto"));
+    QCOMPARE(url.path(), QStringLiteral("bibliohelpers@gmail.com"));
+    // «&» и «+» в тексте не ломают ссылку: тема и текст читаются обратно целиком.
+    const QString query = url.query(QUrl::FullyEncoded);
+    const QStringList parts = query.split(QLatin1Char('&'));
+    QCOMPARE(parts.size(), 2);
+    const QString mailBody = QUrl::fromPercentEncoding(parts.at(1).mid(5).toLatin1());
+    QVERIFY(mailBody.startsWith(report.description));
+    QVERIFY(mailBody.size() <= 1800);
+    QVERIFY(mailBody.contains(QStringLiteral("Последние действия")));
+    QCOMPARE(QUrl::fromPercentEncoding(parts.at(0).mid(8).toLatin1()), report.subject());
+
+    report.includeDetails = false;
+    QCOMPARE(report.body(), report.description);
+}
+
+void ExportTest::settings()
+{
+    namespace S = bh::core::AppSettings;
+    QCOMPARE(S::supportEmail(), QStringLiteral("bibliohelpers@gmail.com"));
+    QTemporaryDir dir;
+    S::setDataRoot(dir.path());
+    QCOMPARE(S::dataRoot(), QDir::cleanPath(dir.path()));
+    QCOMPARE(WorkCopies::defaultDirectory(), QDir(dir.path()).filePath(QStringLiteral("Рабочие файлы")));
+    QCOMPARE(bh::core::ActionLog::defaultPath(), QDir(dir.path()).filePath(QStringLiteral("Журнал/журнал.jsonl")));
+    S::setDataRoot({});
+    QCOMPARE(S::dataRoot(), S::defaultDataRoot());
+    S::setInterfaceScale(130);
+    QCOMPARE(S::interfaceScale(), 100);
+    S::setInterfaceScale(125);
+    QCOMPARE(S::interfaceScale(), 125);
+    S::setInterfaceScale(100);
+    S::setKeepSaveBackups(0);
+    QCOMPARE(S::keepSaveBackups(), 1);
+    S::setKeepSaveBackups(20);
 }
 
 QTEST_GUILESS_MAIN(ExportTest)
