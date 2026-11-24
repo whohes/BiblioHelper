@@ -158,15 +158,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Зеркало Ubuntu иногда отдаёт пакеты Qt по 60 КБ/с (11 минут на 43 МБ),
-      # поэтому пакеты кэшируются в GitHub и ставятся из кэша.
-      - name: Установить Qt 5 (из кэша пакетов)
-        uses: awalsh128/cache-apt-pkgs-action@v1
+      # поэтому Qt 5.15.2 ставится так же, как на Windows, и хранится в кэше GitHub.
+      - name: Установить Qt 5.15.2 (из кэша)
+        uses: jurplel/install-qt-action@v4
         with:
-          packages: qtbase5-dev qtbase5-private-dev
-          version: qt5-v1
+          version: '5.15.2'
+          host: linux
+          target: desktop
+          arch: gcc_64
+          cache: true
+      - name: Заголовки OpenGL для Qt Gui
+        run: test -f /usr/include/GL/gl.h || (sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libgl-dev)
       - name: Собрать
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
           cmake --build build -j 4
       - name: Автотесты
         run: ctest --test-dir build --output-on-failure
