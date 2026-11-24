@@ -25,6 +25,8 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyle>
+#include <QSignalBlocker>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTableView>
 #include <QTextBrowser>
@@ -92,6 +94,29 @@ MainWindow::MainWindow(QWidget *parent)
     });
     m_tabs->addTab(createHelpTab(), QStringLiteral("Справка"));
     layout->addWidget(m_tabs, 1);
+
+    // Листы файла, на которых есть книги, — ярлыками внизу, как в Excel.
+    m_sheetRow = new QWidget(central);
+    auto *sheetLayout = new QHBoxLayout(m_sheetRow);
+    sheetLayout->setContentsMargins(0, 0, 0, 0);
+    sheetLayout->setSpacing(8);
+    m_sheetLabel = new QLabel(QStringLiteral("Листы файла:"), m_sheetRow);
+    m_sheetLabel->setObjectName(QStringLiteral("emptyState"));
+    sheetLayout->addWidget(m_sheetLabel);
+    m_sheetTabs = new QTabBar(m_sheetRow);
+    m_sheetTabs->setObjectName(QStringLiteral("sheetTabs"));
+    m_sheetTabs->setShape(QTabBar::RoundedSouth);
+    m_sheetTabs->setExpanding(false);
+    m_sheetTabs->setDrawBase(false);
+    m_sheetTabs->setUsesScrollButtons(true);
+    sheetLayout->addWidget(m_sheetTabs);
+    sheetLayout->addStretch(1);
+    layout->addWidget(m_sheetRow);
+    m_sheetRow->hide();
+    connect(m_sheetTabs, &QTabBar::tabBarClicked, this, [this](int index) {
+        if (index >= 0 && index != m_sheetTabs->currentIndex())
+            emit sheetRequested(m_sheetTabs->tabData(index).toString());
+    });
     connect(m_tabs, &QTabWidget::currentChanged, this, [this] {
         if (isWithdrawnTabActive())
             emit withdrawnTabShown();
@@ -467,6 +492,21 @@ QWidget *MainWindow::createLogTab()
     layout->addLayout(row);
     setLog({}, {});
     return page;
+}
+
+void MainWindow::setSheetTabs(const QStringList &sheets, const QString &current)
+{
+    const QSignalBlocker block(m_sheetTabs);
+    while (m_sheetTabs->count() > 0)
+        m_sheetTabs->removeTab(0);
+    for (const QString &sheet : sheets) {
+        const int i = m_sheetTabs->addTab(sheet);
+        m_sheetTabs->setTabData(i, sheet);
+        m_sheetTabs->setTabToolTip(i, QStringLiteral("Лист «%1» — отдельный фонд. Щёлкните, чтобы открыть.").arg(sheet));
+        if (sheet == current)
+            m_sheetTabs->setCurrentIndex(i);
+    }
+    m_sheetRow->setVisible(sheets.size() > 1);
 }
 
 bool MainWindow::isLogTabActive() const

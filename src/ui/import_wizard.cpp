@@ -117,6 +117,10 @@ public:
                 [this](int index) { loadSheet(index); });
         connect(m_headerSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) { highlight(); });
         connect(m_preview, &QTableWidget::cellClicked, this, [this](int row, int) { m_headerSpin->setValue(row + 1); });
+        for (int i = 0; i < wizard->m_sheets.size(); ++i) {
+            if (wizard->m_sheets.at(i).name == wizard->m_preferredSheet)
+                best = i;
+        }
         m_sheetCombo->setCurrentIndex(best);
         loadSheet(best);
     }
@@ -496,10 +500,12 @@ private:
 
 // ---------------------------------------------------------------------------
 
-ImportWizard::ImportWizard(const io::XlsxWorkbook &workbook, const QString &fileName, QWidget *parent)
+ImportWizard::ImportWizard(const io::XlsxWorkbook &workbook, const QString &fileName, QWidget *parent,
+                           const QString &sheet)
     : QWizard(parent)
     , m_workbook(workbook)
     , m_fileName(fileName)
+    , m_preferredSheet(sheet)
 {
     setWindowTitle(QStringLiteral("Импорт фонда — %1").arg(fileName));
     setWizardStyle(QWizard::ClassicStyle);

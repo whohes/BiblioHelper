@@ -28,6 +28,7 @@ private slots:
     void normalizeMark();
     void readWithLayout();
     void layoutSurvivesReopen();
+    void severalFundSheets();
     void marksBogdanovka();
     void marksBobrinka();
     void csvParse();
@@ -148,6 +149,82 @@ void ImportTest::layoutSurvivesReopen()
     QCOMPARE(sheet.sheetName, QStringLiteral("Лист1"));
     QCOMPARE(sheet.columnIndex(ColumnRole::Department), -1);
     QCOMPARE(sheet.records.size(), 3138);
+}
+
+void ImportTest::severalFundSheets()
+{
+    // В файле Богдановки есть пустые «Лист2» и «Лист3»: изображаем второй фонд на «Лист2».
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString saved = tmp.filePath(QStringLiteral("saved.xlsx"));
+    const QString saved2 = tmp.filePath(QStringLiteral("saved2.xlsx"));
+    QString error;
+    QString mainId;
+    {
+        XlsxWorkbook wb;
+        QVERIFY2(wb.open(dataPath(QStringLiteral("fund_bogdanovka_2025.xlsx")), &error), qPrintable(error));
+        QVERIFY(wb.sheetNames().contains(QStringLiteral("Лист2")));
+        FundSheet sheet;
+        QVERIFY(FundSheetReader::read(wb, QStringLiteral("Лист1"), &sheet, &error));
+        bh::core::CopyIds::assign(&sheet, {});
+        mainId = sheet.records.first().id;
+        QVERIFY2(bh::core::CopyIds::save(wb, sheet, &error), qPrintable(error));
+
+        // Второй лист: свои настройки и свой экземпляр.
+        ImportLayout second;
+        second.sheet = QStringLiteral("Лист2");
+        second.headerRow = 1;
+        second.roles.insert(1, ColumnRole::AuthorTitle);
+        FundSheet other;
+        other.sheetName = second.sheet;
+        other.headerRow = 1;
+        other.columns.push_back({1, QStringLiteral("Название"), ColumnRole::AuthorTitle});
+        bh::core::FundRecord record;
+        record.id = QStringLiteral("c-second01");
+        record.excelRow = 2;
+        record.values = {QStringLiteral("Детская книга")};
+        other.records.push_back(record);
+        QVERIFY2(bh::core::CopyIds::save(wb, other, &error), qPrintable(error));
+        QVERIFY2(second.save(wb, &error), qPrintable(error));
+        QVERIFY2(wb.saveAs(saved, &error), qPrintable(error));
+    }
+    {
+        XlsxWorkbook wb;
+        QVERIFY2(wb.open(saved, &error), qPrintable(error));
+        const auto layouts = ImportLayout::loadAll(wb);
+        QCOMPARE(layouts.size(), 2);
+        // Последний сохранённый лист открывается первым.
+        QCOMPARE(layouts.first().sheet, QStringLiteral("Лист2"));
+        QCOMPARE(ImportLayout::load(wb).sheet, QStringLiteral("Лист2"));
+        QCOMPARE(layouts.at(1).sheet, QStringLiteral("Лист1"));
+        QCOMPARE(layouts.at(1).headerRow, 4);
+
+        // ID обоих листов на месте; сохранение одного листа не стирает другой.
+        const auto entries = bh::core::CopyIds::load(wb);
+        int first = 0;
+        int second = 0;
+        for (const auto &e : entries) {
+            first += e.sheet == QStringLiteral("Лист1") ? 1 : 0;
+            second += e.sheet == QStringLiteral("Лист2") ? 1 : 0;
+        }
+        QCOMPARE(first, 3138);
+        QCOMPARE(second, 1);
+
+        FundSheet sheet;
+        QVERIFY(FundSheetReader::read(wb, layouts.at(1), &sheet, &error));
+        bh::core::CopyIds::assign(&sheet, entries);
+        QCOMPARE(sheet.records.first().id, mainId);
+        QVERIFY2(bh::core::CopyIds::save(wb, sheet, &error), qPrintable(error));
+        QVERIFY2(wb.saveAs(saved2, &error), qPrintable(error));
+    }
+    XlsxWorkbook wb;
+    QVERIFY2(wb.open(saved2, &error), qPrintable(error));
+    QCOMPARE(ImportLayout::load(wb).sheet, QStringLiteral("Лист1"));
+    QCOMPARE(ImportLayout::loadAll(wb).size(), 2);
+    bool found = false;
+    for (const auto &e : bh::core::CopyIds::load(wb))
+        found = found || e.copyId == QStringLiteral("c-second01");
+    QVERIFY(found);
 }
 
 void ImportTest::marksBogdanovka()

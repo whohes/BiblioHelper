@@ -62,6 +62,15 @@ QVector<CopyIds::Entry> CopyIds::load(const io::XlsxWorkbook &workbook)
 
 bool CopyIds::save(io::XlsxWorkbook &workbook, const FundSheet &sheet, QString *error)
 {
+    // Экземпляры других листов-фондов этого файла остаются как были.
+    const QVector<Entry> others = [&] {
+        QVector<Entry> kept;
+        for (const Entry &e : load(workbook)) {
+            if (!e.sheet.isEmpty() && e.sheet != sheet.sheetName && workbook.sheetNames().contains(e.sheet))
+                kept.push_back(e);
+        }
+        return kept;
+    }();
     if (!workbook.ensureVeryHiddenSheet(sheetName(), error))
         return false;
     QVector<QStringList> rows;
@@ -88,6 +97,12 @@ bool CopyIds::save(io::XlsxWorkbook &workbook, const FundSheet &sheet, QString *
                 row << QString();
             row << record.bookId;
         }
+        rows.push_back(row);
+    }
+    for (const Entry &e : others) {
+        QStringList row{e.copyId, e.sheet, QString::number(e.row), e.fingerprint, e.withdrawnOn, e.reason, e.note};
+        if (!e.bookId.isEmpty())
+            row << e.bookId;
         rows.push_back(row);
     }
     if (!workbook.replaceSheetText(sheetName(), rows, error))

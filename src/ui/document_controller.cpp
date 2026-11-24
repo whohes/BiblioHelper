@@ -134,6 +134,7 @@ DocumentController::DocumentController(MainWindow *window)
     });
     connect(window, &MainWindow::openLogFolderRequested, this, &DocumentController::openLogFolder);
     connect(window, &MainWindow::settingsRequested, this, &DocumentController::showSettings);
+    connect(window, &MainWindow::sheetRequested, this, &DocumentController::switchSheet);
     connect(window, &MainWindow::reportProblemRequested, this, &DocumentController::reportProblem);
     connect(window, &MainWindow::findBooksRequested, this, [this] { findBooks(); });
     connect(window, &MainWindow::mergeBooksRequested, this, &DocumentController::mergeSelectedBooks);
@@ -919,6 +920,72 @@ void DocumentController::showWorkbook(const core::ImportLayout &layout, const QS
     }
     rememberDiskCounts();
     refreshVersions();
+    refreshSheetTabs();
+}
+
+void DocumentController::refreshSheetTabs()
+{
+    m_fundSheets.clear();
+    if (!m_workbook.isOpen()) {
+        m_window->setSheetTabs({}, {});
+        return;
+    }
+    // Листы-фонды: уже настроенные в мастере и те, где программа сама нашла книги.
+    QSet<QString> configured;
+    for (const core::ImportLayout &layout : core::ImportLayout::loadAll(m_workbook))
+        configured.insert(layout.sheet);
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    for (const QString &name : m_workbook.sheetNames()) {
+        if (m_workbook.isVeryHidden(name) || name.startsWith(QLatin1Char('_')) || name == core::archiveSheetName())
+            continue;
+        bool fund = configured.contains(name) || name == m_model->sheet().sheetName;
+        if (!fund) {
+            core::FundSheet detected;
+            fund = core::FundSheetReader::read(m_workbook, name, &detected) && !detected.records.isEmpty();
+        }
+        if (fund)
+            m_fundSheets << name;
+    }
+    QApplication::restoreOverrideCursor();
+    m_window->setSheetTabs(m_fundSheets, m_model->sheet().sheetName);
+}
+
+void DocumentController::switchSheet(const QString &sheet)
+{
+    if (!m_workbook.isOpen() || sheet == m_model->sheet().sheetName)
+        return;
+    if (!confirmDiscardChanges()) {
+        m_window->setSheetTabs(m_fundSheets, m_model->sheet().sheetName);  // ярлык обратно
+        return;
+    }
+    const QString fileName = QFileInfo(m_originalPath).fileName();
+    for (const core::ImportLayout &layout : core::ImportLayout::loadAll(m_workbook)) {
+        if (layout.sheet == sheet) {
+            showWorkbook(layout, fileName);
+            m_window->setUnsavedChanges(false);
+            log(QStringLiteral("open"), QStringLiteral("Лист «%1»").arg(sheet), m_model->rowCount());
+            return;
+        }
+    }
+    // Лист открывается впервые — через мастер импорта, начиная с этого листа.
+    ImportWizard wizard(m_workbook, fileName, m_window, sheet);
+    if (wizard.exec() != QDialog::Accepted) {
+        m_window->setSheetTabs(m_fundSheets, m_model->sheet().sheetName);
+        return;
+    }
+    const core::ImportLayout layout = wizard.layout();
+    const QSet<QString> marks = wizard.withdrawnMarks();
+    showWorkbook(layout, fileName);
+    m_window->setUnsavedChanges(false);
+    log(QStringLiteral("import"),
+        QStringLiteral("Лист «%1», названия столбцов в строке %2").arg(layout.sheet).arg(layout.headerRow),
+        m_model->rowCount());
+    if (m_model->rowCount() > 0) {
+        finishImport(marks);
+        if (core::AppSettings::offerBookGroupsAfterImport())
+            findBooks(true);
+    }
+    refreshSheetTabs();
 }
 
 void DocumentController::finishImport(const QSet<QString> &withdrawnMarks)

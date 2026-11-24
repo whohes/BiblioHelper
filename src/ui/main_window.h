@@ -14,6 +14,7 @@ class QStackedWidget;
 class QTableView;
 class QLineEdit;
 class QPushButton;
+class QTabBar;
 class QTabWidget;
 class QTableWidget;
 
@@ -50,6 +51,8 @@ public:
     // Журнал действий на вкладке «Журнал»; fund — чей журнал показан (пусто — всех фондов).
     void setLog(const QVector<core::LogEntry> &entries, const QString &fund);
     bool isLogTabActive() const;
+    // Ярлыки листов-фондов внизу окна, как в Excel. Меньше двух листов — скрыты.
+    void setSheetTabs(const QStringList &sheets, const QString &current);
     // Вкладка «Справка» (F1).
     void showHelp();
 
@@ -79,6 +82,8 @@ signals:
     void splitBooksRequested();
     void expandAllBooksToggled(bool expand);
     void settingsRequested();
+    // Пользователь щёлкнул по ярлыку другого листа.
+    void sheetRequested(const QString &sheet);
     void reportProblemRequested();
 
 protected:
@@ -126,6 +131,9 @@ private:
     QVector<core::WorkCopies::BackupInfo> m_versionList;
     QWidget *m_logTab = nullptr;
     QWidget *m_helpTab = nullptr;
+    QTabBar *m_sheetTabs = nullptr;
+    QLabel *m_sheetLabel = nullptr;
+    QWidget *m_sheetRow = nullptr;
     QTableWidget *m_log = nullptr;
     QCheckBox *m_logCurrentOnly = nullptr;
     QLabel *m_logEmpty = nullptr;
