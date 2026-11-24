@@ -70,6 +70,8 @@ DocumentController::DocumentController(MainWindow *window)
     m_proxy->setSourceModel(m_model);
     m_proxy->setStatusFilter(models::FundFilterProxy::StatusFilter::Active);
     m_proxy->setGroupBooks(true);
+    window->booksTable()->setIconSize(
+        QSize(models::FundFilterProxy::kArrowIconSize, models::FundFilterProxy::kArrowIconSize));
     m_withdrawnProxy->setSourceModel(m_model);
     m_withdrawnProxy->setStatusFilter(models::FundFilterProxy::StatusFilter::Withdrawn);
 
@@ -144,7 +146,7 @@ DocumentController::DocumentController(MainWindow *window)
             return;
         QTableView *table = m_window->booksTable();
         const QPoint pos = table->viewport()->mapFromGlobal(QCursor::pos());
-        if (pos.x() - table->visualRect(index).left() <= table->fontMetrics().horizontalAdvance(QStringLiteral("▸  ")) + 8)
+        if (pos.x() - table->visualRect(index).left() <= models::FundFilterProxy::kArrowIconSize + 12)
             m_proxy->toggleBook(index);
     });
     // Ширину столбцов «Выбывших» подбираем, когда вкладка видна: до этого у таблицы нет размера.
@@ -357,7 +359,7 @@ void DocumentController::findBooks(bool afterImport)
         copies);
     updateCounts();
     m_window->statusBar()->showMessage(
-        QStringLiteral("Объединено %1 книг из %2 экз. Экземпляры раскрываются стрелкой ▸ в названии. "
+        QStringLiteral("Объединено %1 книг из %2 экз. Экземпляры раскрываются синей стрелкой слева от названия. "
                        "Нажмите «Сохранить», чтобы запомнить это в рабочей копии.")
             .arg(books)
             .arg(copies),
@@ -402,7 +404,7 @@ void DocumentController::splitSelectedBooks()
     const int split = m_model->splitBooks(rows);
     if (split == 0) {
         QMessageBox::information(m_window, QStringLiteral("Разделить"),
-                                 QStringLiteral("Выделите книгу из нескольких экземпляров (строку со стрелкой ▸) "
+                                 QStringLiteral("Выделите книгу из нескольких экземпляров (строку с синей стрелкой) "
                                                 "или отдельные её экземпляры и нажмите «Разделить»: они станут "
                                                 "отдельными книгами."));
         return;
