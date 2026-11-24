@@ -465,26 +465,31 @@ void EditingTest::report()
         const int r = 5 + i;
         QCOMPARE(wb.cellValue(s, r, 1).toInt(), i + 1);
         QCOMPARE(bh::core::displayText(wb.cellValue(s, r, 2)), bh::core::displayText(record.values.at(author)));
-        QCOMPARE(wb.cellValue(s, r, 6).toString(), QStringLiteral("ветхость"));
-        QCOMPARE(wb.cellValue(s, r, 7).toString(), QStringLiteral("акт № 3"));
+        // Год выпуска и отдел — как в фонде.
+        QCOMPARE(bh::core::displayText(wb.cellValue(s, r, 4)),
+                 bh::core::displayText(record.values.at(model.sheet().columnIndex(ColumnRole::Year))));
+        QCOMPARE(bh::core::displayText(wb.cellValue(s, r, 5)),
+                 bh::core::displayText(record.values.at(model.sheet().columnIndex(ColumnRole::Department))));
+        QCOMPARE(wb.cellValue(s, r, 8).toString(), QStringLiteral("ветхость"));
+        QCOMPARE(wb.cellValue(s, r, 9).toString(), QStringLiteral("акт № 3"));
         double rub = 0;
         if (bh::core::priceInRubles(record.values.at(price), &rub)) {
-            QVERIFY(qAbs(wb.cellValue(s, r, 4).toDouble() - rub) < 1e-9);
+            QVERIFY(qAbs(wb.cellValue(s, r, 6).toDouble() - rub) < 1e-9);
             expected += rub;
         }
     }
     // «Сорок четыре рубля десять копеек» стали числом.
     double rub = 0;
     QVERIFY(bh::core::parseRubles(bh::core::displayText(model.sheet().records.at(textPrice).values.at(price)), &rub));
-    QCOMPARE(wb.cellValue(s, 6, 4).toDouble(), rub);
+    QCOMPARE(wb.cellValue(s, 6, 6).toDouble(), rub);
     // Без цены — как в фонде.
-    QCOMPARE(bh::core::displayText(wb.cellValue(s, 7, 4)),
+    QCOMPARE(bh::core::displayText(wb.cellValue(s, 7, 6)),
              bh::core::displayText(model.sheet().records.at(noPrice).values.at(price)));
     // Дата выбытия — дата Excel (серийное число 46346 = 20.11.2026).
-    QCOMPARE(wb.cellValue(s, 5, 5).toInt(), 46346);
+    QCOMPARE(wb.cellValue(s, 5, 7).toInt(), 46346);
     // Итог.
     QCOMPARE(wb.cellValue(s, 8, 2).toString(), QStringLiteral("Итого: 3 экз."));
-    QVERIFY(qAbs(wb.cellValue(s, 8, 4).toDouble() - expected) < 1e-6);
+    QVERIFY(qAbs(wb.cellValue(s, 8, 6).toDouble() - expected) < 1e-6);
     QVERIFY(wb.cellValue(s, 9, 2).toString().isEmpty());
 }
 
