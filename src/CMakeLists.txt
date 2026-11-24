@@ -22,6 +22,8 @@ add_library(bh_core STATIC
     core/withdrawal_archive.cpp
     core/withdrawal_report.h
     core/withdrawal_report.cpp
+    core/update_info.h
+    core/update_info.cpp
     core/xls_import.h
     core/xls_import.cpp
     core/work_copy.h
@@ -58,6 +60,8 @@ add_executable(BiblioHelper WIN32
     ui/fund_table_page.h
     ui/icons.h
     ui/icons.cpp
+    ui/update_checker.h
+    ui/update_checker.cpp
     ui/settings_dialog.h
     ui/settings_dialog.cpp
     ui/problem_report_dialog.h
@@ -78,11 +82,17 @@ add_executable(BiblioHelper WIN32
     ui/main_window.cpp
     resources/resources.qrc
 )
+if(WIN32)
+    # Значок .exe и версия в свойствах файла.
+    configure_file(resources/app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
+    target_sources(BiblioHelper PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
+endif()
 target_compile_definitions(BiblioHelper PRIVATE BIBLIOHELPER_VERSION="${PROJECT_VERSION}")
 target_link_libraries(BiblioHelper PRIVATE
     bh_core
     Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::Concurrent
+    Qt${QT_VERSION_MAJOR}::Network
     QXlsx::QXlsx)
 
 install(TARGETS BiblioHelper RUNTIME DESTINATION .)

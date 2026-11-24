@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDate>
 #include <QString>
 
 namespace bh::core {
@@ -25,6 +26,13 @@ void setKeepSaveBackups(int count);
 // Предлагать объединить одинаковые книги сразу после импорта.
 bool offerBookGroupsAfterImport();
 void setOfferBookGroupsAfterImport(bool offer);
+
+// Раз в день тихо проверять, не вышла ли новая версия (нужен интернет).
+bool checkUpdates();
+void setCheckUpdates(bool check);
+// Когда последний раз удалось проверить обновления (пусто — ни разу).
+QDate lastUpdateCheck();
+void setLastUpdateCheck(const QDate &date);
 
 // Адрес для «Сообщить о проблеме».
 QString supportEmail();

@@ -2,6 +2,7 @@
 
 #include "core/action_log.h"
 #include "core/app_settings.h"
+#include "core/update_info.h"
 #include "core/problem_report.h"
 #include "core/fund_export.h"
 #include "core/fund_sheet.h"
@@ -36,6 +37,7 @@ private slots:
     void actionLog();
     void problemReport();
     void settings();
+    void updateInfo();
 
 private:
     static QString dataPath(const QString &name)
@@ -275,6 +277,41 @@ void ExportTest::settings()
     S::setKeepSaveBackups(0);
     QCOMPARE(S::keepSaveBackups(), 1);
     S::setKeepSaveBackups(20);
+}
+
+void ExportTest::updateInfo()
+{
+    using namespace bh::core;
+    QVERIFY(Updates::compareVersions(QStringLiteral("1.10.0"), QStringLiteral("1.9.3")) > 0);
+    QVERIFY(Updates::compareVersions(QStringLiteral("v1.2"), QStringLiteral("1.2.0")) == 0);
+    QVERIFY(Updates::compareVersions(QStringLiteral("1.0.0"), QStringLiteral("1.0.1")) < 0);
+    QVERIFY(Updates::compareVersions(QStringLiteral("2.0.0-beta"), QStringLiteral("1.9")) > 0);
+
+    const QByteArray json = R"({"tag_name":"v1.2.0","body":"* Исправлено","html_url":"https://github.com/whohes/BiblioHelper/releases/tag/v1.2.0",
+        "draft":false,"prerelease":false,"assets":[
+        {"name":"notes.txt","browser_download_url":"https://example.org/notes.txt","size":10},
+        {"name":"BiblioHelper-1.2.0-setup.exe","browser_download_url":"https://github.com/whohes/BiblioHelper/releases/download/v1.2.0/BiblioHelper-1.2.0-setup.exe","size":12345}]})";
+    const auto info = Updates::parseLatestRelease(json);
+    QVERIFY(info.has_value());
+    QCOMPARE(info->version, QStringLiteral("1.2.0"));
+    QCOMPARE(info->setupName, QStringLiteral("BiblioHelper-1.2.0-setup.exe"));
+    QCOMPARE(info->setupSize, qint64(12345));
+    QCOMPARE(info->notes, QStringLiteral("* Исправлено"));
+
+    // Без установщика, по http или предварительная версия — не предлагаем.
+    QVERIFY(!Updates::parseLatestRelease(R"({"tag_name":"v1.3","assets":[]})"));
+    QVERIFY(!Updates::parseLatestRelease(
+        R"({"tag_name":"v1.3","assets":[{"name":"a-setup.exe","browser_download_url":"http://x/a-setup.exe"}]})"));
+    QVERIFY(!Updates::parseLatestRelease(
+        R"({"tag_name":"v1.3","prerelease":true,"assets":[{"name":"a-setup.exe","browser_download_url":"https://x/a-setup.exe"}]})"));
+    QVERIFY(!Updates::parseLatestRelease("not json"));
+
+    QVERIFY(AppSettings::checkUpdates());
+    AppSettings::setCheckUpdates(false);
+    QVERIFY(!AppSettings::checkUpdates());
+    AppSettings::setCheckUpdates(true);
+    AppSettings::setLastUpdateCheck(QDate(2026, 11, 24));
+    QCOMPARE(AppSettings::lastUpdateCheck(), QDate(2026, 11, 24));
 }
 
 QTEST_GUILESS_MAIN(ExportTest)

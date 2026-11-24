@@ -5,3 +5,4 @@ CMakeLists.txt.user*
 .vs/
 .vscode/
 *.autosave
+installer-out/

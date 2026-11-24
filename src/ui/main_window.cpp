@@ -61,6 +61,28 @@ MainWindow::MainWindow(QWidget *parent)
     layout->setContentsMargins(12, 12, 12, 8);
     layout->setSpacing(10);
 
+    // Полоса «Доступна новая версия» (видна, только когда она вышла).
+    m_updateBanner = new QFrame(central);
+    m_updateBanner->setObjectName(QStringLiteral("updateBanner"));
+    auto *bannerLayout = new QHBoxLayout(m_updateBanner);
+    bannerLayout->setContentsMargins(14, 6, 8, 6);
+    m_updateText = new QLabel(m_updateBanner);
+    m_updateText->setObjectName(QStringLiteral("updateText"));
+    bannerLayout->addWidget(m_updateText, 1);
+    auto *notes = new QPushButton(QStringLiteral("Что нового"), m_updateBanner);
+    auto *update = new QPushButton(QStringLiteral("Обновить"), m_updateBanner);
+    update->setProperty("primary", true);
+    auto *later = new QPushButton(QStringLiteral("Позже"), m_updateBanner);
+    later->setToolTip(QStringLiteral("Скрыть до следующего запуска программы"));
+    bannerLayout->addWidget(notes);
+    bannerLayout->addWidget(update);
+    bannerLayout->addWidget(later);
+    layout->addWidget(m_updateBanner);
+    m_updateBanner->hide();
+    connect(notes, &QPushButton::clicked, this, &MainWindow::updateNotesRequested);
+    connect(update, &QPushButton::clicked, this, &MainWindow::updateRequested);
+    connect(later, &QPushButton::clicked, m_updateBanner, &QWidget::hide);
+
     // Строка с названием рабочего файла и признаком несохранённых изменений.
     auto *fileRow = new QHBoxLayout;
     m_fileLabel = new QLabel(central);
@@ -637,6 +659,13 @@ void MainWindow::updateDocumentActions()
     // Главная кнопка — цветом: без файла «Открыть Excel», с изменениями «Сохранить».
     setPrimary(m_open, !hasDocument);
     setPrimary(m_save, hasDocument && m_unsaved);
+}
+
+void MainWindow::setUpdateBanner(const QString &version)
+{
+    m_updateText->setText(QStringLiteral("Доступна новая версия программы: %1. "
+                                         "Ваши файлы и настройки сохранятся.").arg(version));
+    m_updateBanner->setVisible(!version.isEmpty());
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

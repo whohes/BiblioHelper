@@ -3,6 +3,9 @@ name: Сборка и тесты
 on:
   push:
     branches: [main]
+    # Тег v1.2.3 — выпуск версии: установщик выкладывается в GitHub Releases,
+    # и программы у пользователей предложат обновиться.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -11,6 +14,8 @@ jobs:
   windows-win32:
     name: Windows (Qt 5.15, 32 бита)
     runs-on: windows-2022
+    permissions:
+      contents: write   # только для выпуска релиза по тегу
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +32,39 @@ jobs:
       - name: Подключить компилятор MinGW 8.1 (32 бита)
         shell: pwsh
         run: Add-Content $env:GITHUB_PATH "$env:IQTA_TOOLS\mingw810_32\bin"
+
+      # OpenSSL 1.1.1 (32 бита) — для HTTPS (проверка обновлений). Qt 5.15 его не
+      # содержит, готовых сборок 1.1.1 в репозитории Qt больше нет, поэтому
+      # собираем из исходников тем же MinGW 8.1 и кладём в кэш (~7 минут один раз).
+      - name: Кэш OpenSSL 1.1.1w
+        id: openssl-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\openssl-1.1.1w-x86
+          key: openssl-1.1.1w-mingw81-x86-v1
+
+      - name: Собрать OpenSSL 1.1.1w (32 бита)
+        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        # Git Bash: сборке OpenSSL для mingw нужен sh и perl из MSYS.
+        shell: bash
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          curl -sSL -o openssl.tar.gz https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz
+          echo "cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8  openssl.tar.gz" | sha256sum -c -
+          tar -xzf openssl.tar.gz
+          cd openssl-1.1.1w
+          export PATH="$(cygpath -u "$IQTA_TOOLS")/mingw810_32/bin:$PATH"
+          gcc --version | head -1
+          # В perl из Git нет Pod::Usage, а Configure подключает его лишь для справки.
+          mkdir -p "$RUNNER_TEMP/perl5/Pod"
+          printf 'package Pod::Usage;\nuse Exporter "import";\nour @EXPORT = qw(pod2usage);\nsub pod2usage { exit 0 }\n1;\n' > "$RUNNER_TEMP/perl5/Pod/Usage.pm"
+          export PERL5LIB="$RUNNER_TEMP/perl5"
+          perl Configure mingw shared no-asm no-tests -static-libgcc --prefix=C:/openssl-1.1.1w-x86
+          mingw32-make -j4 build_libs
+          mkdir -p /c/openssl-1.1.1w-x86/bin
+          cp libssl-1_1.dll libcrypto-1_1.dll /c/openssl-1.1.1w-x86/bin/
+          ls -la /c/openssl-1.1.1w-x86/bin
 
       - name: Настроить сборку
         shell: pwsh
@@ -69,11 +107,49 @@ jobs:
           & (Join-Path $qtBin 'windeployqt.exe') --no-translations --compiler-runtime dist\BiblioHelper.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Test-Path dist\platforms\qwindows.dll)) { throw 'Нет platforms\qwindows.dll' }
+          # OpenSSL для HTTPS: Qt ищет эти DLL рядом с программой.
+          $ssl = 'C:\openssl-1.1.1w-x86\bin'
+          Get-ChildItem $ssl
+          Copy-Item (Join-Path $ssl 'libssl-1_1.dll'), (Join-Path $ssl 'libcrypto-1_1.dll') dist\
+          # Программа сама проверяет, что HTTPS доступен (код выхода 0).
+          $p = Start-Process dist\BiblioHelper.exe -ArgumentList '--check-https' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "HTTPS недоступен в сборке (код $($p.ExitCode))" }
+
+      - name: Собрать установщик
+        id: setup
+        shell: pwsh
+        run: |
+          $version = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'VERSION\s+(\d+\.\d+\.\d+)').Groups[1].Value
+          "version=$version" >> $env:GITHUB_OUTPUT
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $iscc /Qp "/DAppVersion=$version" installer\BiblioHelper.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem installer-out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BiblioHelper-setup
+          path: installer-out/*.exe
 
       - uses: actions/upload-artifact@v4
         with:
           name: BiblioHelper-win32
           path: dist/
+
+      - name: Выпустить версию (только по тегу)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.setup.outputs.version }}
+        run: |
+          if ("${{ github.ref_name }}" -ne "v$env:VERSION") { throw "Тег ${{ github.ref_name }} не совпадает с версией $env:VERSION в CMakeLists.txt" }
+          gh release create "${{ github.ref_name }}" (Get-ChildItem installer-out\*.exe).FullName `
+            --title "BiblioHelper $env:VERSION" --notes-file RELEASE_NOTES.md
 
   # Быстрая проверка, что код собирается и на Linux (системный Qt 5.15).
   linux:
@@ -81,11 +157,21 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Установить Qt 5
-        run: sudo apt-get update && sudo apt-get install -y qtbase5-dev qtbase5-private-dev
+      # Зеркало Ubuntu иногда отдаёт пакеты Qt по 60 КБ/с (11 минут на 43 МБ),
+      # поэтому Qt 5.15.2 ставится так же, как на Windows, и хранится в кэше GitHub.
+      - name: Установить Qt 5.15.2 (из кэша)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          host: linux
+          target: desktop
+          arch: gcc_64
+          cache: true
+      - name: Заголовки OpenGL для Qt Gui
+        run: test -f /usr/include/GL/gl.h || (sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libgl-dev)
       - name: Собрать
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
           cmake --build build -j 4
       - name: Автотесты
         run: ctest --test-dir build --output-on-failure
