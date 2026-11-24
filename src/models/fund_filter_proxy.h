@@ -96,7 +96,7 @@ public:
 
     // ---- Книги из нескольких экземпляров (вкладка «Книги») ----
     // Включено: экземпляры одной книги идут подряд, свёрнутая книга показана
-    // одной строкой «▸ Название (3 экз.)», раскрытая — всеми экземплярами.
+    // одной строкой «Название (3 экз.)» со стрелкой слева, раскрытая — всеми экземплярами.
     void setGroupBooks(bool group);
     bool groupBooks() const { return m_group; }
     void setExpandAll(bool expand);
@@ -116,7 +116,7 @@ public:
     QVector<int> shownSourceRows() const;
 
     // Размер стрелки раскрытия книги (в точках) и сама стрелка.
-    static constexpr int kArrowIconSize = 22;
+    static constexpr int kArrowIconSize = 28;
     static QIcon bookArrowIcon(bool expanded);
 
     void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;

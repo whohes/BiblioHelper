@@ -331,7 +331,7 @@ void FundFilterProxy::sort(int column, Qt::SortOrder order)
 
 QIcon FundFilterProxy::bookArrowIcon(bool expanded)
 {
-    // Крупная стрелка на голубой плашке: её легко заметить и попасть по ней мышью.
+    // Крупная белая стрелка на синей плашке: её легко заметить и попасть по ней мышью.
     static QIcon icons[2];
     QIcon &icon = icons[expanded ? 1 : 0];
     if (!icon.isNull())
@@ -343,10 +343,10 @@ QIcon FundFilterProxy::bookArrowIcon(bool expanded)
         QPainter p(&pixmap);
         p.setRenderHint(QPainter::Antialiasing);
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(0xdc, 0xe8, 0xf7));
-        p.drawRoundedRect(QRectF(0, 0, side, side), 4 * scale, 4 * scale);
         p.setBrush(QColor(0x2f, 0x6d, 0xb5));
-        const double m = side * 0.28;
+        p.drawRoundedRect(QRectF(1 * scale, 1 * scale, side - 2 * scale, side - 2 * scale), 5 * scale, 5 * scale);
+        p.setBrush(Qt::white);
+        const double m = side * 0.26;
         QPolygonF arrow;
         if (expanded)
             arrow << QPointF(m, side * 0.36) << QPointF(side - m, side * 0.36) << QPointF(side / 2.0, side * 0.70);

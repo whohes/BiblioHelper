@@ -139,7 +139,7 @@ DocumentController::DocumentController(MainWindow *window)
     connect(window, &MainWindow::mergeBooksRequested, this, &DocumentController::mergeSelectedBooks);
     connect(window, &MainWindow::splitBooksRequested, this, &DocumentController::splitSelectedBooks);
     connect(window, &MainWindow::expandAllBooksToggled, m_proxy, &models::FundFilterProxy::setExpandAll);
-    // Стрелка ▸ слева в названии книги раскрывает и сворачивает её экземпляры.
+    // Синяя стрелка слева в названии книги раскрывает и сворачивает её экземпляры.
     connect(window->booksTable(), &QAbstractItemView::clicked, this, [this](const QModelIndex &index) {
         const int author = m_model->sheet().columnIndex(core::ColumnRole::AuthorTitle);
         if (index.column() != author || !m_proxy->isBookRow(index))
@@ -359,7 +359,7 @@ void DocumentController::findBooks(bool afterImport)
         copies);
     updateCounts();
     m_window->statusBar()->showMessage(
-        QStringLiteral("Объединено %1 книг из %2 экз. Экземпляры раскрываются синей стрелкой слева от названия. "
+        QStringLiteral("Объединено %1 книг из %2 экз. Экземпляры раскрываются синей кнопкой-стрелкой слева от названия. "
                        "Нажмите «Сохранить», чтобы запомнить это в рабочей копии.")
             .arg(books)
             .arg(copies),
@@ -404,7 +404,7 @@ void DocumentController::splitSelectedBooks()
     const int split = m_model->splitBooks(rows);
     if (split == 0) {
         QMessageBox::information(m_window, QStringLiteral("Разделить"),
-                                 QStringLiteral("Выделите книгу из нескольких экземпляров (строку с синей стрелкой) "
+                                 QStringLiteral("Выделите книгу из нескольких экземпляров (строку с синей кнопкой-стрелкой) "
                                                 "или отдельные её экземпляры и нажмите «Разделить»: они станут "
                                                 "отдельными книгами."));
         return;
