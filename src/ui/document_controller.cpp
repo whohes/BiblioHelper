@@ -13,12 +13,15 @@
 #include "record_dialog.h"
 #include "withdraw_dialog.h"
 #include "export_dialog.h"
+#include "book_groups_dialog.h"
+#include "core/book_groups.h"
 #include "core/fund_export.h"
 #include "io/xlsx_font_colors.h"
 #include "filter_header_view.h"
 #include "filter_popup.h"
 
 #include <QCheckBox>
+#include <QCursor>
 #include <QDesktopServices>
 #include <QDir>
 #include <QUrl>
@@ -63,6 +66,7 @@ DocumentController::DocumentController(MainWindow *window)
 {
     m_proxy->setSourceModel(m_model);
     m_proxy->setStatusFilter(models::FundFilterProxy::StatusFilter::Active);
+    m_proxy->setGroupBooks(true);
     m_withdrawnProxy->setSourceModel(m_model);
     m_withdrawnProxy->setStatusFilter(models::FundFilterProxy::StatusFilter::Withdrawn);
 
@@ -124,6 +128,20 @@ DocumentController::DocumentController(MainWindow *window)
         refreshLog();
     });
     connect(window, &MainWindow::openLogFolderRequested, this, &DocumentController::openLogFolder);
+    connect(window, &MainWindow::findBooksRequested, this, [this] { findBooks(); });
+    connect(window, &MainWindow::mergeBooksRequested, this, &DocumentController::mergeSelectedBooks);
+    connect(window, &MainWindow::splitBooksRequested, this, &DocumentController::splitSelectedBooks);
+    connect(window, &MainWindow::expandAllBooksToggled, m_proxy, &models::FundFilterProxy::setExpandAll);
+    // Стрелка ▸ слева в названии книги раскрывает и сворачивает её экземпляры.
+    connect(window->booksTable(), &QAbstractItemView::clicked, this, [this](const QModelIndex &index) {
+        const int author = m_model->sheet().columnIndex(core::ColumnRole::AuthorTitle);
+        if (index.column() != author || !m_proxy->isBookRow(index))
+            return;
+        QTableView *table = m_window->booksTable();
+        const QPoint pos = table->viewport()->mapFromGlobal(QCursor::pos());
+        if (pos.x() - table->visualRect(index).left() <= table->fontMetrics().horizontalAdvance(QStringLiteral("▸  ")) + 8)
+            m_proxy->toggleBook(index);
+    });
     // Ширину столбцов «Выбывших» подбираем, когда вкладка видна: до этого у таблицы нет размера.
     connect(window, &MainWindow::withdrawnTabShown, this, [this] {
         if (m_fitWithdrawnPending && m_window->withdrawnPage()->isTableShown()) {
@@ -167,7 +185,11 @@ void DocumentController::selectRecord(const QString &id)
     const int row = m_model->rowForId(id);
     if (row < 0)
         return;
-    const QModelIndex proxyIndex = m_proxy->mapFromSource(m_model->index(row, 0));
+    QModelIndex proxyIndex = m_proxy->mapFromSource(m_model->index(row, 0));
+    if (!proxyIndex.isValid() && !m_model->bookIdOf(row).isEmpty()) {
+        m_proxy->expandBooks({row});  // экземпляр внутри свёрнутой книги
+        proxyIndex = m_proxy->mapFromSource(m_model->index(row, 0));
+    }
     QTableView *table = m_window->booksTable();
     if (!proxyIndex.isValid()) {
         m_window->statusBar()->showMessage(
@@ -277,6 +299,89 @@ void DocumentController::undo()
     m_window->statusBar()->showMessage(QStringLiteral("Последнее изменение отменено"), 5000);
 }
 
+void DocumentController::findBooks(bool afterImport)
+{
+    if (!m_workbook.isOpen() || m_model->columnCount() == 0)
+        return;
+    const QVector<QVector<int>> groups = core::suggestBookGroups(m_model->sheet());
+    if (groups.isEmpty()) {
+        if (!afterImport)
+            QMessageBox::information(m_window, QStringLiteral("Одинаковые книги"),
+                                     QStringLiteral("Книг, записанных несколькими строками, не найдено: все строки "
+                                                    "с одинаковым названием и годом уже объединены."));
+        return;
+    }
+    BookGroupsDialog dialog(m_model->sheet(), groups, m_window);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const QVector<QVector<int>> checked = dialog.checkedGroups();
+    int copies = 0;
+    for (const auto &group : checked)
+        copies += group.size();
+    const int books = m_model->mergeBooks(checked);
+    if (books == 0)
+        return;
+    log(QStringLiteral("merge"),
+        QStringLiteral("Одинаковые книги: %1 книг из %2 экз. (одинаковые название и год)").arg(books).arg(copies),
+        copies);
+    updateCounts();
+    m_window->statusBar()->showMessage(
+        QStringLiteral("Объединено %1 книг из %2 экз. Экземпляры раскрываются стрелкой ▸ в названии. "
+                       "Нажмите «Сохранить», чтобы запомнить это в рабочей копии.")
+            .arg(books)
+            .arg(copies),
+        12000);
+}
+
+void DocumentController::mergeSelectedBooks()
+{
+    if (!m_workbook.isOpen())
+        return;
+    const QVector<int> rows = m_model->withBookmates(selectedModelRows(m_window->booksTable(), m_proxy));
+    if (rows.size() < 2) {
+        QMessageBox::information(m_window, QStringLiteral("Объединить в книгу"),
+                                 QStringLiteral("Выделите две или больше строк — экземпляры одной книги — и нажмите "
+                                                "«Объединить в книгу».\n\nНесколько строк выделяются щелчками с "
+                                                "нажатой клавишей Ctrl. Чтобы программа сама нашла книги с одинаковым "
+                                                "названием и годом, нажмите «Одинаковые книги…»."));
+        return;
+    }
+    const QString described = describeRows(rows);
+    if (m_model->mergeBooks({rows}) == 0)
+        return;
+    m_proxy->expandBooks({rows.first()});
+    log(QStringLiteral("merge"), described, rows.size());
+    updateCounts();
+    m_window->statusBar()->showMessage(
+        QStringLiteral("%1 экз. объединены в одну книгу. Нажмите «Сохранить», чтобы запомнить это в рабочей копии.")
+            .arg(rows.size()),
+        10000);
+}
+
+void DocumentController::splitSelectedBooks()
+{
+    if (!m_workbook.isOpen())
+        return;
+    QVector<int> rows;
+    for (int row : selectedModelRows(m_window->booksTable(), m_proxy)) {
+        // Свёрнутая книга — разделить её целиком.
+        rows += m_proxy->isCollapsedBook(row) ? m_model->bookRows(m_model->bookIdOf(row)) : QVector<int>{row};
+    }
+    const QString described = describeRows(rows);
+    const int split = m_model->splitBooks(rows);
+    if (split == 0) {
+        QMessageBox::information(m_window, QStringLiteral("Разделить"),
+                                 QStringLiteral("Выделите книгу из нескольких экземпляров (строку со стрелкой ▸) "
+                                                "или отдельные её экземпляры и нажмите «Разделить»: они станут "
+                                                "отдельными книгами."));
+        return;
+    }
+    log(QStringLiteral("split"), described, split);
+    updateCounts();
+    m_window->statusBar()->showMessage(
+        QStringLiteral("Отделено %1 экз.: теперь это отдельные книги.").arg(split), 10000);
+}
+
 QString DocumentController::countText(models::FundFilterProxy *proxy, bool withdrawn) const
 {
     const core::FundSheet &sheet = m_model->sheet();
@@ -292,7 +397,13 @@ QString DocumentController::countText(models::FundFilterProxy *proxy, bool withd
         if (totals.withoutPrice > 0)
             sum += QStringLiteral(" (без цены: %1)").arg(totals.withoutPrice);
     }
-    const QString what = withdrawn ? QStringLiteral("выбывших экземпляров") : QStringLiteral("экземпляров");
+    QString what = withdrawn ? QStringLiteral("выбывших экземпляров") : QStringLiteral("экземпляров");
+    if (!withdrawn) {
+        // Книги из нескольких экземпляров считаются один раз.
+        const int books = core::countBooks(sheet, proxy->shownSourceRows());
+        if (books != totals.rows)
+            sum = QStringLiteral(" (книг: %1)").arg(QLocale(QLocale::Russian).toString(books)) + sum;
+    }
     if (proxy->hasAnyFilter())
         return QStringLiteral("Показано %1 из %2 %3%4. Включены поиск или фильтры — «Сбросить фильтры» покажет все.")
             .arg(totals.rows).arg(total).arg(what, sum);
@@ -361,6 +472,29 @@ void DocumentController::withdrawSelected()
                                  QStringLiteral("Сначала выделите в списке экземпляры, которые выбывают.\n\n"
                                                 "Несколько строк — щелчками с нажатой клавишей Ctrl, "
                                                 "подряд — с клавишей Shift."));
+        return;
+    }
+    // Книгу из нескольких экземпляров целиком не списываем: раскрываем её,
+    // чтобы пользователь выделил нужные экземпляры.
+    QVector<int> collapsed;
+    for (int row : rows) {
+        if (m_proxy->isCollapsedBook(row))
+            collapsed << row;
+    }
+    if (!collapsed.isEmpty()) {
+        const int copies = m_proxy->shownCopies(collapsed.first()).size();
+        m_proxy->expandBooks(collapsed);
+        m_window->booksTable()->clearSelection();
+        QMessageBox::information(
+            m_window, QStringLiteral("Выбытие"),
+            collapsed.size() == 1
+                ? QStringLiteral("Книга «%1» — это %2 экз. Её экземпляры теперь показаны списком: выделите те, "
+                                 "что выбывают, и снова нажмите «Выбытие».")
+                      .arg(core::displayText(m_model->sheet().records.at(collapsed.first()).values.value(
+                               m_model->sheet().columnIndex(core::ColumnRole::AuthorTitle))))
+                      .arg(copies)
+                : QStringLiteral("Среди выделенного есть книги из нескольких экземпляров. Их экземпляры теперь "
+                                 "показаны списком: выделите те, что выбывают, и снова нажмите «Выбытие»."));
         return;
     }
     WithdrawDialog dialog(m_model->sheet(), rows, m_window);
@@ -698,8 +832,10 @@ bool DocumentController::openFile(const QString &path)
         log(QStringLiteral("open"), QStringLiteral("Рабочая копия: %1").arg(QFileInfo(workPath).fileName()),
             sheet.records.size());
     }
-    if (imported && m_model->rowCount() > 0)
+    if (imported && m_model->rowCount() > 0) {
         finishImport(withdrawnMarks);
+        findBooks(true);
+    }
     return true;
 }
 
@@ -946,8 +1082,8 @@ void DocumentController::exportData()
         else
             ++counts.activeAll;
     }
-    counts.activeShown = m_proxy->rowCount();
-    counts.withdrawnShown = m_withdrawnProxy->rowCount();
+    counts.activeShown = m_proxy->shownSourceRows().size();
+    counts.withdrawnShown = m_withdrawnProxy->shownSourceRows().size();
     ExportDialog::Scope initial = ExportDialog::Scope::ActiveAll;
     if (m_window->isWithdrawnTabActive())
         initial = counts.withdrawnShown != counts.withdrawnAll ? ExportDialog::Scope::WithdrawnShown
@@ -965,12 +1101,7 @@ void DocumentController::exportData()
     exporter.fundName = QFileInfo(m_originalPath).completeBaseName();
     exporter.createdOn = QDate::currentDate();
     exporter.columns = dialog.columns();
-    auto shown = [this](models::FundFilterProxy *proxy) {
-        QVector<int> rows;
-        for (int r = 0; r < proxy->rowCount(); ++r)
-            rows.push_back(proxy->mapToSource(proxy->index(r, 0)).row());
-        return rows;
-    };
+    auto shown = [](models::FundFilterProxy *proxy) { return proxy->shownSourceRows(); };
     switch (scope) {
     case ExportDialog::Scope::ActiveShown: exporter.records = shown(m_proxy); break;
     case ExportDialog::Scope::WithdrawnShown: exporter.records = shown(m_withdrawnProxy); break;

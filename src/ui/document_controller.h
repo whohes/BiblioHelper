@@ -54,6 +54,9 @@ private slots:
     // лист с книгами) и показывает его в таблицах.
     void showWorkbook(const core::ImportLayout &layout, const QString &displayName);
     void undo();
+    void findBooks(bool afterImport = false);
+    void mergeSelectedBooks();
+    void splitSelectedBooks();
     void withdrawSelected();
     void restoreSelected();
     void createReport();

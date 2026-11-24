@@ -27,6 +27,8 @@ public:
 
     // Кнопка над таблицей (например, «Вернуть в фонд»).
     void addButton(QPushButton *button);
+    // Элемент справа над таблицей (например, «Раскрыть все книги»).
+    void addTrailingWidget(QWidget *widget);
 
     void setMessage(const QString &text);
     // Пустой экран: заголовок крупно и кнопка под текстом (например, «Открыть Excel»).

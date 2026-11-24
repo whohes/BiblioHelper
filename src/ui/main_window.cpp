@@ -222,6 +222,24 @@ QWidget *MainWindow::createBooksTab()
     open->setIcon(makeIcon(IconKind::Open, Qt::white));
     connect(open, &QPushButton::clicked, this, &MainWindow::openRequested);
     m_booksPage->setEmptyAction(open);
+
+    m_findBooks = createActionButton(QStringLiteral("Одинаковые книги…"),
+                                     QStringLiteral("Найти книги, записанные несколькими строками, и объединить их "
+                                                    "в книги с экземплярами"));
+    m_mergeBooks = createActionButton(QStringLiteral("Объединить в книгу"),
+                                      QStringLiteral("Выделенные строки — экземпляры одной книги"));
+    m_splitBooks = createActionButton(QStringLiteral("Разделить"),
+                                      QStringLiteral("Выделенные экземпляры станут отдельными книгами"));
+    m_booksPage->addButton(m_findBooks);
+    m_booksPage->addButton(m_mergeBooks);
+    m_booksPage->addButton(m_splitBooks);
+    m_expandAll = new QCheckBox(QStringLiteral("Раскрыть все книги"));
+    m_expandAll->setToolTip(QStringLiteral("Показать все экземпляры каждой книги"));
+    m_booksPage->addTrailingWidget(m_expandAll);
+    connect(m_findBooks, &QPushButton::clicked, this, &MainWindow::findBooksRequested);
+    connect(m_mergeBooks, &QPushButton::clicked, this, &MainWindow::mergeBooksRequested);
+    connect(m_splitBooks, &QPushButton::clicked, this, &MainWindow::splitBooksRequested);
+    connect(m_expandAll, &QCheckBox::toggled, this, &MainWindow::expandAllBooksToggled);
     return m_booksPage;
 }
 
@@ -502,6 +520,20 @@ QWidget *MainWindow::createHelpTab()
         "<p>Кроме Excel (.xlsx) можно открыть <b>.xls</b> (Excel 97–2003) и <b>.csv</b> (кодировка UTF-8 или "
         "Windows-1251, разделитель «;», «,» или табуляция). Они переводятся в рабочую копию .xlsx; "
         "оформление из .xls не переносится, только значения.</p>"
+        "<h2>Книги и экземпляры</h2>"
+        "<p>В файле фонда каждый экземпляр записан отдельной строкой. Строки одной книги можно объединить: "
+        "на вкладке «Книги» такая книга показана одной строкой «▸ Название (3 экз.)». Щелчок по стрелке ▸ "
+        "показывает все её экземпляры, ещё один щелчок сворачивает. Галочка <b>«Раскрыть все книги»</b> "
+        "показывает экземпляры всех книг сразу.</p>"
+        "<p><b>«Одинаковые книги…»</b> находит строки с одинаковыми автором, названием (точки, пробелы и большие "
+        "буквы не важны) и годом. Отметьте, какие из них объединить. Это же окно появляется сразу после импорта "
+        "нового файла.</p>"
+        "<p><b>«Объединить в книгу»</b>: выделите строки (с клавишей Ctrl) и нажмите кнопку, если программа "
+        "не узнала одну книгу сама, например из-за опечатки. <b>«Разделить»</b> делает выделенные экземпляры "
+        "отдельными книгами. Строки в Excel при этом не меняются: принадлежность к книге запоминается в "
+        "рабочей копии при «Сохранить».</p>"
+        "<p>Выбывает всегда конкретный экземпляр: если выделить свёрнутую книгу и нажать «Выбытие», программа "
+        "раскроет её и попросит выделить нужные экземпляры.</p>"
         "<h2>Экспорт</h2>"
         "<p>Кнопка <b>«Экспорт»</b> сохраняет в отдельный файл весь фонд, найденные сейчас книги (с учётом поиска "
         "и фильтров) или выбывшие. Можно выбрать столбцы и формат: Excel (с итогом, фильтрами и закреплённой "

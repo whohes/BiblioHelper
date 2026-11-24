@@ -51,6 +51,7 @@ struct FundColumn
 struct FundRecord
 {
     QString id;           // внутренний ID экземпляра (c-xxxxxxxx), не зависит от строки
+    QString bookId;       // ID книги (b-xxxxxxxx), если экземпляр объединён с другими; пусто — книга из одного экземпляра
     int excelRow = 0;     // 0 — новая запись, ещё не записана в Excel
     QVector<QVariant> values;  // по порядку FundSheet::columns
     QVector<QRgb> colors;      // цвет шрифта ячеек (0 — обычный); пусто, если цветов нет

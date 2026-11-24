@@ -2,6 +2,8 @@
 add_library(bh_core STATIC
     core/action_log.h
     core/action_log.cpp
+    core/book_groups.h
+    core/book_groups.cpp
     core/copy_ids.h
     core/copy_ids.cpp
     core/csv_import.h
@@ -52,6 +54,8 @@ add_executable(BiblioHelper WIN32
     ui/fund_table_page.h
     ui/icons.h
     ui/icons.cpp
+    ui/book_groups_dialog.h
+    ui/book_groups_dialog.cpp
     ui/export_dialog.h
     ui/export_dialog.cpp
     ui/import_wizard.h

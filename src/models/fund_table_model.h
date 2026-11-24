@@ -30,6 +30,8 @@ public:
     static constexpr int IdRole = Qt::UserRole + 4;
     // Экземпляр выбыл (bool).
     static constexpr int WithdrawnRole = Qt::UserRole + 5;
+    // ID книги, если экземпляр объединён с другими (иначе пусто).
+    static constexpr int BookIdRole = Qt::UserRole + 6;
 
     explicit FundTableModel(QObject *parent = nullptr);
 
@@ -54,6 +56,19 @@ public:
     // Вернуть выбывшие экземпляры в фонд.
     int restore(const QVector<int> &rows);
     bool isWithdrawn(int row) const { return m_sheet.isWithdrawn(row); }
+
+    // ---- Книги из нескольких экземпляров ----
+    QString bookIdOf(int row) const;
+    // Экземпляры книги (строки модели по порядку); пусто, если такой книги нет.
+    QVector<int> bookRows(const QString &bookId) const;
+    // Строка и все экземпляры её книги.
+    QVector<int> withBookmates(const QVector<int> &rows) const;
+    // Объединить каждую группу строк в одну книгу (одно действие для отмены).
+    // Возвращает число получившихся книг.
+    int mergeBooks(const QVector<QVector<int>> &groups);
+    // Отделить экземпляры от их книг: каждый становится отдельной книгой.
+    // Возвращает число отделённых экземпляров.
+    int splitBooks(const QVector<int> &rows);
 
     bool canUndo() const { return !m_undo.isEmpty(); }
     QString undoText() const;
@@ -86,11 +101,12 @@ private:
         int row = 0;
         QVector<QVariant> oldValues;
         QSet<int> oldDirty;
+        QString oldBookId;
     };
 
     struct UndoStep
     {
-        enum Kind { Edit, Add } kind;
+        enum Kind { Edit, Add, Books } kind;
         QVector<RowState> rows;  // Edit: прежнее состояние строк; Add: одна строка
         QString text;
     };
@@ -101,11 +117,15 @@ private:
     QString titleOf(int row) const;
     void pushUndo(UndoStep step);
     void rebuildRow(int row);
+    void rebuildBooks();
+    // Записать ID книг строкам одним шагом отмены.
+    int setBookIds(const QHash<int, QString> &bookIds, const QString &undoText);
     void setModified(bool modified);
 
     core::FundSheet m_sheet;
     QVector<QVector<Cell>> m_cells;
     QHash<int, QSet<int>> m_dirty;  // строка модели → изменённые столбцы
+    QHash<QString, QVector<int>> m_books;  // ID книги → строки модели
     QVector<UndoStep> m_undo;
     bool m_modified = false;  // заранее посчитанный текст: быстрые поиск и сортировка
 };

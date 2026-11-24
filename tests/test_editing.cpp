@@ -1,6 +1,7 @@
 // Этап 4: внутренние ID экземпляров, правка и добавление записей, отмена,
 // запись изменений в рабочую копию.
 
+#include "core/book_groups.h"
 #include "core/copy_ids.h"
 #include "core/fund_sheet.h"
 #include "core/withdrawal_archive.h"
@@ -35,6 +36,7 @@ private slots:
     void withdrawWriteAndReopen();
     void report();
     void archive();
+    void bookGroups();
 
 private:
     static QString dataPath(const QString &name)
@@ -576,6 +578,118 @@ void EditingTest::archive()
     const int statusCol = sheet.columns.at(sheet.columnIndex(ColumnRole::Status)).excelColumn;
     QCOMPARE(wb.cellValue(a, 2, statusCol).toString(), QStringLiteral("Выбыло 23.11.2026, ветхость"));
     QVERIFY(wb.cellValue(a, 5, 2).toString().isEmpty());
+}
+
+void EditingTest::bookGroups()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString work = tmp.filePath(QStringLiteral("work.xlsx"));
+    const QString saved = tmp.filePath(QStringLiteral("saved.xlsx"));
+    QVERIFY(QFile::copy(dataPath(QStringLiteral("fund_bogdanovka_2025.xlsx")), work));
+
+    XlsxWorkbook wb;
+    FundSheet sheet;
+    QVERIFY(openSheet(wb, work, &sheet));
+    CopyIds::assign(&sheet, {});
+    const int author = sheet.columnIndex(ColumnRole::AuthorTitle);
+
+    // Ключ: точки, пробелы и регистр не важны, год важен.
+    bh::core::FundRecord a = sheet.records.first();
+    bh::core::FundRecord b = a;
+    a.values[author] = QStringLiteral("Абрамов Ф. Братья и сестры");
+    b.values[author] = QStringLiteral("Абрамов.Ф.      Братья  и   сёстры.");
+    QCOMPARE(bh::core::bookKey(sheet, a), bh::core::bookKey(sheet, b));
+    const int year = sheet.columnIndex(ColumnRole::Year);
+    QVERIFY(year >= 0);
+    b.values[year] = 1901;
+    a.values[year] = 1987;
+    QVERIFY(bh::core::bookKey(sheet, a) != bh::core::bookKey(sheet, b));
+
+    const auto groups = bh::core::suggestBookGroups(sheet);
+    QVERIFY(!groups.isEmpty());
+    int copies = 0;
+    for (const auto &g : groups) {
+        QVERIFY(g.size() >= 2);
+        copies += g.size();
+        for (int r : g)
+            QCOMPARE(bh::core::bookKey(sheet, sheet.records.at(r)), bh::core::bookKey(sheet, sheet.records.at(g.first())));
+    }
+    qInfo("groups: %d, copies in them: %d of %d", int(groups.size()), copies, int(sheet.records.size()));
+
+    bh::models::FundTableModel model;
+    model.setSheet(sheet);
+    bh::models::FundFilterProxy proxy;
+    proxy.setSourceModel(&model);
+    proxy.setStatusFilter(bh::models::FundFilterProxy::StatusFilter::Active);
+    proxy.setGroupBooks(true);
+    proxy.sort(-1);
+    const int rowsBefore = proxy.rowCount();
+
+    // Объединение всех групп одним действием; отмена возвращает как было.
+    QCOMPARE(model.mergeBooks(groups), int(groups.size()));
+    QVERIFY(model.isModified());
+    QCoreApplication::processEvents();  // прокси пересчитывает книги после изменений
+    QCOMPARE(proxy.rowCount(), rowsBefore - copies + int(groups.size()));
+    QCOMPARE(proxy.shownSourceRows().size(), rowsBefore);  // экземпляры никуда не делись
+    const QVector<int> first = groups.first();
+    QVERIFY(proxy.isCollapsedBook(first.first()));
+    QCOMPARE(proxy.shownCopies(first.first()), first);
+    // Экземпляры книги стоят подряд после раскрытия.
+    proxy.expandBooks({first.first()});
+    const QModelIndex head = proxy.mapFromSource(model.index(first.first(), 0));
+    QVERIFY(proxy.isBookRow(head));
+    for (int i = 1; i < first.size(); ++i)
+        QCOMPARE(proxy.mapToSource(proxy.index(head.row() + i, 0)).row(), first.at(i));
+    QVERIFY(bh::core::suggestBookGroups(model.sheet()).isEmpty());
+
+    model.undo();
+    QCoreApplication::processEvents();
+    QCOMPARE(proxy.rowCount(), rowsBefore);
+    QVERIFY(model.bookIdOf(first.first()).isEmpty());
+
+    // Объединение, разделение одного экземпляра, сохранение и повторное открытие.
+    QCOMPARE(model.mergeBooks(groups), int(groups.size()));
+    QVector<int> three;
+    for (const auto &g : groups) {
+        if (g.size() >= 3) {
+            three = g;
+            break;
+        }
+    }
+    const QVector<int> pair = groups.first().size() == 2 ? groups.first() : QVector<int>();
+    if (!three.isEmpty()) {
+        QCOMPARE(model.splitBooks({three.last()}), 1);
+        QVERIFY(model.bookIdOf(three.last()).isEmpty());
+        QCOMPARE(model.bookRows(model.bookIdOf(three.first())).size(), three.size() - 1);
+    }
+    if (!pair.isEmpty()) {
+        // От книги из двух экземпляров после разделения не остаётся книги.
+        QCOMPARE(model.splitBooks({pair.last()}), 1);
+        QVERIFY(model.bookIdOf(pair.first()).isEmpty());
+    }
+    // Ручное объединение двух разных книг.
+    QCOMPARE(model.mergeBooks({{0, 1}}), 1);
+    QCOMPARE(model.bookIdOf(0), model.bookIdOf(1));
+
+    QString error;
+    QVERIFY2(model.writeChanges(wb, &error), qPrintable(error));
+    QVERIFY2(wb.saveAs(saved, &error), qPrintable(error));
+    const FundSheet before = model.sheet();
+
+    XlsxWorkbook reopened;
+    FundSheet again;
+    QVERIFY(openSheet(reopened, saved, &again));
+    CopyIds::assign(&again, CopyIds::load(reopened));
+    QCOMPARE(again.records.size(), before.records.size());
+    int grouped = 0;
+    for (int r = 0; r < again.records.size(); ++r) {
+        QCOMPARE(again.records.at(r).id, before.records.at(r).id);
+        QCOMPARE(again.records.at(r).bookId, before.records.at(r).bookId);
+        grouped += again.records.at(r).bookId.isEmpty() ? 0 : 1;
+    }
+    QVERIFY(grouped > 0);
+    QCOMPARE(bh::core::countBooks(again, {0, 1}), 1);
 }
 
 QTEST_GUILESS_MAIN(EditingTest)

@@ -32,6 +32,8 @@ public:
         QString withdrawnOn;
         QString reason;
         QString note;
+        // Книга, в которую объединён экземпляр (пусто — сам по себе).
+        QString bookId;
     };
 
     static QVector<Entry> load(const io::XlsxWorkbook &workbook);
@@ -45,6 +47,7 @@ public:
 
     static QString fingerprint(const FundSheet &sheet, const FundRecord &record);
     static QString newId();
+    static QString newBookId();
 };
 
 } // namespace bh::core
