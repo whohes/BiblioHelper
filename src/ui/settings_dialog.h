@@ -25,6 +25,7 @@ private:
     QComboBox *m_scale = nullptr;
     QLineEdit *m_folder = nullptr;
     QSpinBox *m_keep = nullptr;
+    QCheckBox *m_checkUpdates = nullptr;
     QCheckBox *m_offerBooks = nullptr;
 };
 

@@ -95,6 +95,14 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     importRow->addWidget(m_offerBooks);
     section(QStringLiteral("Импорт"), importRow, {});
 
+    m_checkUpdates = new QCheckBox(QStringLiteral("Проверять раз в день, не вышла ли новая версия"), this);
+    m_checkUpdates->setChecked(AppSettings::checkUpdates());
+    auto *updatesRow = new QHBoxLayout;
+    updatesRow->addWidget(m_checkUpdates);
+    section(QStringLiteral("Обновления"), updatesRow,
+            QStringLiteral("Нужен интернет. Если вышла новая версия, вверху окна появится жёлтая полоса. "
+                           "Без интернета программа работает как обычно."));
+
     auto *buttons = new QDialogButtonBox(this);
     auto *ok = buttons->addButton(QStringLiteral("Сохранить"), QDialogButtonBox::AcceptRole);
     ok->setProperty("primary", true);
@@ -128,6 +136,7 @@ bool SettingsDialog::apply()
         QDir().mkpath(folder);
     AppSettings::setKeepSaveBackups(m_keep->value());
     AppSettings::setOfferBookGroupsAfterImport(m_offerBooks->isChecked());
+    AppSettings::setCheckUpdates(m_checkUpdates->isChecked());
     return restart;
 }
 

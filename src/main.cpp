@@ -1,14 +1,31 @@
 #include "core/app_settings.h"
 #include "ui/document_controller.h"
 #include "ui/main_window.h"
+#include "ui/update_checker.h"
 
 #include <QApplication>
 #include <QFile>
 #include <QFont>
+#include <QIcon>
+#include <QSslSocket>
 #include <QStyleFactory>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 int main(int argc, char *argv[])
 {
+    // Проверка сборки в CI: есть ли OpenSSL для HTTPS (код выхода 0 — есть).
+    if (argc > 1 && qstrcmp(argv[1], "--check-https") == 0) {
+        QCoreApplication core(argc, argv);
+        return QSslSocket::supportsSsl() ? 0 : 3;
+    }
+
+#ifdef Q_OS_WIN
+    // По этому имени установщик ждёт, пока программа закроется перед обновлением.
+    CreateMutexW(nullptr, FALSE, L"BiblioHelperRunning");
+#endif
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     // Чёткое отображение при масштабе Windows 125–150 %.
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
@@ -24,6 +41,7 @@ int main(int argc, char *argv[])
 
     QApplication app(argc, argv);
     QApplication::setApplicationDisplayName(QStringLiteral("Учёт книжного фонда"));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/app.png")));
     QApplication::setApplicationVersion(QStringLiteral(BIBLIOHELPER_VERSION));
     QApplication::setOrganizationName(QStringLiteral("BiblioHelper"));
 
@@ -42,6 +60,7 @@ int main(int argc, char *argv[])
 
     bh::ui::MainWindow window;
     auto *documents = new bh::ui::DocumentController(&window);
+    new bh::ui::UpdateChecker(&window);
     window.showMaximized();
 
     // Файл можно открыть, перетащив его на значок программы.

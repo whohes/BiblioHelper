@@ -1,6 +1,8 @@
 <RCC>
     <qresource prefix="/">
         <file>style.qss</file>
+        <file>app.png</file>
         <file>help.html</file>
+        <file>certs/roots.pem</file>
     </qresource>
 </RCC>

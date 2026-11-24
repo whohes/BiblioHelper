@@ -55,6 +55,8 @@ public:
     void setSheetTabs(const QStringList &sheets, const QString &current);
     // Вкладка «Справка» (F1).
     void showHelp();
+    // Жёлтая полоса «Доступна версия X» вверху окна; пустая версия — скрыть.
+    void setUpdateBanner(const QString &version);
 
 signals:
     void openRequested();
@@ -85,6 +87,9 @@ signals:
     // Пользователь щёлкнул по ярлыку другого листа.
     void sheetRequested(const QString &sheet);
     void reportProblemRequested();
+    // Кнопки жёлтой полосы обновления.
+    void updateNotesRequested();
+    void updateRequested();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -101,6 +106,8 @@ private:
     void updateDocumentActions();
     void setPrimary(QPushButton *button, bool primary);
 
+    QWidget *m_updateBanner = nullptr;
+    QLabel *m_updateText = nullptr;
     QLabel *m_fileLabel = nullptr;
     QLabel *m_unsavedLabel = nullptr;
     QLineEdit *m_search = nullptr;

@@ -14,6 +14,8 @@ const char kDataRoot[] = "settings/dataRoot";
 const char kScale[] = "settings/interfaceScale";
 const char kKeepBackups[] = "settings/keepSaveBackups";
 const char kOfferBooks[] = "settings/offerBookGroups";
+const char kCheckUpdates[] = "settings/checkUpdates";
+const char kLastUpdateCheck[] = "updates/lastCheck";
 
 } // namespace
 
@@ -69,6 +71,26 @@ bool offerBookGroupsAfterImport()
 void setOfferBookGroupsAfterImport(bool offer)
 {
     QSettings().setValue(QLatin1String(kOfferBooks), offer);
+}
+
+bool checkUpdates()
+{
+    return QSettings().value(QLatin1String(kCheckUpdates), true).toBool();
+}
+
+void setCheckUpdates(bool check)
+{
+    QSettings().setValue(QLatin1String(kCheckUpdates), check);
+}
+
+QDate lastUpdateCheck()
+{
+    return QDate::fromString(QSettings().value(QLatin1String(kLastUpdateCheck)).toString(), Qt::ISODate);
+}
+
+void setLastUpdateCheck(const QDate &date)
+{
+    QSettings().setValue(QLatin1String(kLastUpdateCheck), date.toString(Qt::ISODate));
 }
 
 QString supportEmail()

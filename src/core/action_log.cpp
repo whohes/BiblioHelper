@@ -39,6 +39,7 @@ QString ActionLog::actionTitle(const QString &action)
         {QStringLiteral("cleanup"), QStringLiteral("Очистка выбывших")},
         {QStringLiteral("export"), QStringLiteral("Экспорт")},
         {QStringLiteral("restore"), QStringLiteral("Восстановление версии")},
+        {QStringLiteral("update"), QStringLiteral("Обновление программы")},
         {QStringLiteral("error"), QStringLiteral("Ошибка")},
     };
     return titles.value(action, action);
