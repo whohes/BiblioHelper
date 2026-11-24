@@ -157,14 +157,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Установить Qt 5
-        # Раньше шаг шёл ~17 минут: почти всё время уходило на перестройку
-        # справочника man-db после установки пакетов. Отключаем её и лишние пакеты.
-        run: |
-          echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends qtbase5-dev qtbase5-private-dev
+      # Зеркало Ubuntu иногда отдаёт пакеты Qt по 60 КБ/с (11 минут на 43 МБ),
+      # поэтому пакеты кэшируются в GitHub и ставятся из кэша.
+      - name: Установить Qt 5 (из кэша пакетов)
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: qtbase5-dev qtbase5-private-dev
+          version: qt5-v1
       - name: Собрать
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
