@@ -3,8 +3,7 @@ name: Сборка и тесты
 on:
   push:
     branches: [main]
-    # Тег v1.2.3 — выпуск версии: установщик выкладывается в GitHub Releases,
-    # и программы у пользователей предложат обновиться.
+    # Тег v1.2.3 тоже выпускает версию (см. шаг «Выпустить версию»).
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -140,16 +139,24 @@ jobs:
           name: BiblioHelper-win32
           path: dist/
 
-      - name: Выпустить версию (только по тегу)
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Выпуск: новая версия в CMakeLists.txt попала в main — CI сам создаёт
+      # релиз vX.Y.Z с установщиком (если такого ещё нет). Можно и тегом vX.Y.Z.
+      - name: Выпустить версию
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.setup.outputs.version }}
         run: |
-          if ("${{ github.ref_name }}" -ne "v$env:VERSION") { throw "Тег ${{ github.ref_name }} не совпадает с версией $env:VERSION в CMakeLists.txt" }
-          gh release create "${{ github.ref_name }}" (Get-ChildItem installer-out\*.exe).FullName `
-            --title "BiblioHelper $env:VERSION" --notes-file RELEASE_NOTES.md
+          $tag = "v$env:VERSION"
+          if ("${{ github.ref_type }}" -eq 'tag' -and "${{ github.ref_name }}" -ne $tag) {
+            throw "Тег ${{ github.ref_name }} не совпадает с версией $env:VERSION в CMakeLists.txt"
+          }
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) { "Версия $tag уже выпущена"; exit 0 }
+          gh release create $tag (Get-ChildItem installer-out\*.exe).FullName `
+            --target $env:GITHUB_SHA --title "BiblioHelper $env:VERSION" --notes-file RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # Быстрая проверка, что код собирается и на Linux (системный Qt 5.15).
   linux:
