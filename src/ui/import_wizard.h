@@ -23,7 +23,9 @@ class ImportWizard : public QWizard
     Q_OBJECT
 
 public:
-    ImportWizard(const io::XlsxWorkbook &workbook, const QString &fileName, QWidget *parent = nullptr);
+    // sheet — с какого листа начать (иначе — с листа, где больше всего книг).
+    ImportWizard(const io::XlsxWorkbook &workbook, const QString &fileName, QWidget *parent = nullptr,
+                 const QString &sheet = {});
 
     // Настройки чтения листа и прочитанный по ним фонд.
     core::ImportLayout layout() const { return m_layout; }
@@ -48,6 +50,7 @@ private:
 
     const io::XlsxWorkbook &m_workbook;
     QString m_fileName;
+    QString m_preferredSheet;
     QVector<SheetInfo> m_sheets;
     core::ImportLayout m_layout;
     core::FundSheet m_sheet;

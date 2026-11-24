@@ -3,6 +3,8 @@
 #include <QTemporaryDir>
 #include <QSet>
 
+#include <utility>
+
 #include "io/xlsx_workbook.h"
 
 #include "xlsxdocument.h"
@@ -17,6 +19,9 @@ void setError(QString *error, const QString &text)
     if (error)
         *error = text;
 }
+
+// Номер столбца «Цена» в отчёте (с 1); за ней — дата, причина, примечание.
+constexpr int kPrice = 6;
 
 QXlsx::Format cellFormat(bool bold = false)
 {
@@ -36,6 +41,8 @@ QStringList WithdrawalReport::columnTitles()
     return {QStringLiteral("№"),
             QStringLiteral("Автор и название"),
             QStringLiteral("Инв. №"),
+            QStringLiteral("Год выпуска"),
+            QStringLiteral("Отдел"),
             QStringLiteral("Цена, руб."),
             QStringLiteral("Дата выбытия"),
             QStringLiteral("Причина выбытия"),
@@ -51,6 +58,8 @@ bool WithdrawalReport::write(const QString &path, const FundSheet &sheet, QStrin
     const int date = sheet.columnIndex(ColumnRole::WithdrawDate);
     const int reason = sheet.columnIndex(ColumnRole::WithdrawReason);
     const int note = sheet.columnIndex(ColumnRole::WithdrawNote);
+    const int year = sheet.columnIndex(ColumnRole::Year);
+    const int department = sheet.columnIndex(ColumnRole::Department);
     auto value = [](const FundRecord &record, int column) {
         return column >= 0 && column < record.values.size() ? record.values.at(column) : QVariant();
     };
@@ -105,34 +114,40 @@ bool WithdrawalReport::write(const QString &path, const FundSheet &sheet, QStrin
         // Инв. номер — как в фонде: число остаётся числом, «б/н» — текстом.
         const QVariant inv = value(record, inventory);
         doc.write(row, 3, inv.isValid() ? inv : QVariant(QString()), centered);
+        // Год и отдел — как в фонде (число остаётся числом).
+        for (const auto &[column, role] : {std::pair<int, int>{4, year}, std::pair<int, int>{5, department}}) {
+            const QVariant v = value(record, role);
+            doc.write(row, column, v.isValid() ? v : QVariant(QString()), centered);
+        }
         double rubles = 0;
         if (priceInRubles(value(record, price), &rubles)) {
             double copies = value(record, quantity).toDouble();
             if (copies <= 0)
                 copies = 1;
             sum += rubles * copies;
-            doc.write(row, 4, rubles, money);
+            doc.write(row, kPrice, rubles, money);
         } else {
             // «б/ц», «нет» — как в фонде.
-            doc.write(row, 4, displayText(value(record, price)), centered);
+            doc.write(row, kPrice, displayText(value(record, price)), centered);
         }
-        doc.write(row, 5, value(record, date).toDate(), day);
-        doc.write(row, 6, displayText(value(record, reason)), text);
-        doc.write(row, 7, displayText(value(record, note)), text);
+        doc.write(row, kPrice + 1, value(record, date).toDate(), day);
+        doc.write(row, kPrice + 2, displayText(value(record, reason)), text);
+        doc.write(row, kPrice + 3, displayText(value(record, note)), text);
     }
 
     ++row;
     QXlsx::Format total = cellFormat(true);
     doc.write(row, 1, QString(), total);
     doc.write(row, 2, QStringLiteral("Итого: %1 экз.").arg(count), total);
-    doc.write(row, 3, QString(), total);
+    for (int c = 3; c < kPrice; ++c)
+        doc.write(row, c, QString(), total);
     QXlsx::Format totalMoney = total;
     totalMoney.setNumberFormat(QStringLiteral("#,##0.00"));
-    doc.write(row, 4, sum, totalMoney);
-    for (int c = 5; c <= lastColumn; ++c)
+    doc.write(row, kPrice, sum, totalMoney);
+    for (int c = kPrice + 1; c <= lastColumn; ++c)
         doc.write(row, c, QString(), total);
 
-    const double widths[] = {6, 60, 12, 12, 14, 26, 30};
+    const double widths[] = {6, 56, 12, 10, 10, 12, 14, 24, 28};
     for (int c = 0; c < lastColumn; ++c)
         doc.setColumnWidth(c + 1, widths[c]);
 

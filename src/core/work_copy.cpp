@@ -1,5 +1,7 @@
 #include "work_copy.h"
 
+#include "app_settings.h"
+
 #include "csv_import.h"
 #include "xls_import.h"
 
@@ -34,10 +36,7 @@ WorkCopies::WorkCopies(const QString &dir)
 
 QString WorkCopies::defaultDirectory()
 {
-    QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    if (documents.isEmpty())
-        documents = QDir::homePath();
-    return QDir(documents).filePath(QStringLiteral("BiblioHelper/Рабочие файлы"));
+    return QDir(AppSettings::dataRoot()).filePath(QStringLiteral("Рабочие файлы"));
 }
 
 QString WorkCopies::backupDirectory()

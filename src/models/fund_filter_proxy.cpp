@@ -4,6 +4,10 @@
 #include "fund_table_model.h"
 
 #include <QColor>
+#include <QIcon>
+#include <QPainter>
+#include <QPixmap>
+#include <QPolygonF>
 #include <QLocale>
 #include <QTimer>
 
@@ -325,10 +329,41 @@ void FundFilterProxy::sort(int column, Qt::SortOrder order)
         QSortFilterProxyModel::sort(column, order);
 }
 
+QIcon FundFilterProxy::bookArrowIcon(bool expanded)
+{
+    // Крупная белая стрелка на синей плашке: её легко заметить и попасть по ней мышью.
+    static QIcon icons[2];
+    QIcon &icon = icons[expanded ? 1 : 0];
+    if (!icon.isNull())
+        return icon;
+    for (int scale : {1, 2}) {
+        const int side = kArrowIconSize * scale;
+        QPixmap pixmap(side, side);
+        pixmap.fill(Qt::transparent);
+        QPainter p(&pixmap);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0x2f, 0x6d, 0xb5));
+        p.drawRoundedRect(QRectF(1 * scale, 1 * scale, side - 2 * scale, side - 2 * scale), 5 * scale, 5 * scale);
+        p.setBrush(Qt::white);
+        const double m = side * 0.26;
+        QPolygonF arrow;
+        if (expanded)
+            arrow << QPointF(m, side * 0.36) << QPointF(side - m, side * 0.36) << QPointF(side / 2.0, side * 0.70);
+        else
+            arrow << QPointF(side * 0.38, m) << QPointF(side * 0.72, side / 2.0) << QPointF(side * 0.38, side - m);
+        p.drawPolygon(arrow);
+        p.end();
+        icon.addPixmap(pixmap);
+    }
+    return icon;
+}
+
 QVariant FundFilterProxy::data(const QModelIndex &index, int role) const
 {
     if (!m_group || !index.isValid()
-        || (role != Qt::DisplayRole && role != Qt::ToolTipRole && role != Qt::BackgroundRole))
+        || (role != Qt::DisplayRole && role != Qt::ToolTipRole && role != Qt::BackgroundRole
+            && role != Qt::DecorationRole))
         return QSortFilterProxyModel::data(index, role);
     const auto *model = qobject_cast<const FundTableModel *>(sourceModel());
     if (!model)
@@ -344,6 +379,8 @@ QVariant FundFilterProxy::data(const QModelIndex &index, int role) const
     const int author = model->sheet().columnIndex(core::ColumnRole::AuthorTitle);
     if (index.column() != author)
         return QSortFilterProxyModel::data(index, role);
+    if (role == Qt::DecorationRole)
+        return head ? bookArrowIcon(expanded) : QVariant();
     const QString text = QSortFilterProxyModel::data(index, Qt::DisplayRole).toString();
     if (role == Qt::ToolTipRole) {
         return head ? QStringLiteral("%1\nКнига из %2 экз. Щёлкните по стрелке слева, чтобы %3.")
@@ -353,10 +390,10 @@ QVariant FundFilterProxy::data(const QModelIndex &index, int role) const
                     : text;
     }
     if (!head)
-        return QStringLiteral("        %1").arg(text);
+        return QStringLiteral("            %1").arg(text);
     if (expanded)
-        return QStringLiteral("▾  %1").arg(text);
-    return QStringLiteral("▸  %1   (%2 экз.)").arg(text).arg(book.size());
+        return text;
+    return QStringLiteral("%1   (%2 экз.)").arg(text).arg(book.size());
 }
 
 bool FundFilterProxy::acceptsRow(int sourceRow, int ignoredColumn) const

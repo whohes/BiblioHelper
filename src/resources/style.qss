@@ -67,6 +67,23 @@ QTabBar::tab {
 }
 QTabBar::tab:hover { color: #1f2933; border-bottom-color: #c9d1dc; }
 QTabBar::tab:selected { color: #2f6db5; border-bottom-color: #2f6db5; }
+/* Ярлыки листов внизу окна — как в Excel: выбранный лист белый, остальные серые. */
+QTabBar#sheetTabs::tab {
+    background: #e9edf2;
+    border: 1px solid #c9d1dc;
+    border-top: none;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+    padding: 6px 18px;
+    margin-right: 2px;
+    color: #4a5563;
+}
+QTabBar#sheetTabs::tab:hover { background: #f3f6fa; color: #1f2933; }
+QTabBar#sheetTabs::tab:selected {
+    background: #ffffff;
+    color: #2f6db5;
+    border-bottom: 3px solid #2f6db5;
+}
 
 /* ---- Шапка окна ---- */
 QLabel#fileLabel { font-weight: bold; color: #1f2933; }

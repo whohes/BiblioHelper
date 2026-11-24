@@ -99,31 +99,73 @@ QString ImportLayout::sheetName()
     return QStringLiteral("_BiblioHelperImport");
 }
 
-ImportLayout ImportLayout::load(const io::XlsxWorkbook &workbook)
+QVector<ImportLayout> ImportLayout::loadAll(const io::XlsxWorkbook &workbook)
 {
-    ImportLayout layout;
+    QVector<ImportLayout> layouts;
     if (!workbook.sheetNames().contains(sheetName()))
-        return layout;
+        return layouts;
     const io::SheetSize size = workbook.sheetSize(sheetName());
     const auto rows = workbook.readRows(sheetName(), 1, std::max(size.rows, 1), 3);
+    QString active;
+    // Каждый лист — блок строк, начинающийся с «sheet» (в версии 1 блок один).
     for (const auto &row : rows) {
         const QString key = row.values.value(0).toString();
         const QString value = row.values.value(1).toString();
-        if (key == QLatin1String("sheet")) {
-            layout.sheet = value;
+        if (key == QLatin1String("active")) {
+            active = value;
+        } else if (key == QLatin1String("sheet")) {
+            layouts.push_back({});
+            layouts.last().sheet = value;
+        } else if (layouts.isEmpty()) {
+            continue;
         } else if (key == QLatin1String("header_row")) {
-            layout.headerRow = value.toInt();
+            layouts.last().headerRow = value.toInt();
         } else if (key == QLatin1String("column")) {
             bool ok = false;
             const int column = value.toInt();
             const ColumnRole role = roleFromKey(row.values.value(2).toString(), &ok);
             if (ok && column > 0)
-                layout.roles.insert(column, role);
+                layouts.last().roles.insert(column, role);
         }
     }
-    if (!layout.isValid())
-        return {};
-    return layout;
+    QVector<ImportLayout> valid;
+    for (const ImportLayout &layout : qAsConst(layouts)) {
+        if (!layout.isValid())
+            continue;
+        if (layout.sheet == active)
+            valid.prepend(layout);
+        else
+            valid.push_back(layout);
+    }
+    return valid;
+}
+
+ImportLayout ImportLayout::load(const io::XlsxWorkbook &workbook)
+{
+    const QVector<ImportLayout> layouts = loadAll(workbook);
+    return layouts.isEmpty() ? ImportLayout() : layouts.first();
+}
+
+bool ImportLayout::saveAll(io::XlsxWorkbook &workbook, const QVector<ImportLayout> &layouts, const QString &active,
+                           QString *error)
+{
+    if (!workbook.ensureVeryHiddenSheet(sheetName(), error))
+        return false;
+    QVector<QStringList> rows;
+    rows.push_back({QStringLiteral("version"), QStringLiteral("2")});
+    rows.push_back({QStringLiteral("active"), active});
+    for (const ImportLayout &layout : layouts) {
+        if (!layout.isValid())
+            continue;
+        rows.push_back({QStringLiteral("sheet"), layout.sheet});
+        rows.push_back({QStringLiteral("header_row"), QString::number(layout.headerRow)});
+        QList<int> columns = layout.roles.keys();
+        std::sort(columns.begin(), columns.end());
+        for (int column : qAsConst(columns))
+            rows.push_back(
+                {QStringLiteral("column"), QString::number(column), roleKey(layout.roles.value(column))});
+    }
+    return workbook.replaceSheetText(sheetName(), rows, error);
 }
 
 bool ImportLayout::save(io::XlsxWorkbook &workbook, QString *error) const
@@ -132,17 +174,13 @@ bool ImportLayout::save(io::XlsxWorkbook &workbook, QString *error) const
         setError(error, QStringLiteral("Не заданы лист и строка заголовков"));
         return false;
     }
-    if (!workbook.ensureVeryHiddenSheet(sheetName(), error))
-        return false;
-    QVector<QStringList> rows;
-    rows.push_back({QStringLiteral("version"), QStringLiteral("1")});
-    rows.push_back({QStringLiteral("sheet"), sheet});
-    rows.push_back({QStringLiteral("header_row"), QString::number(headerRow)});
-    QList<int> columns = roles.keys();
-    std::sort(columns.begin(), columns.end());
-    for (int column : qAsConst(columns))
-        rows.push_back({QStringLiteral("column"), QString::number(column), roleKey(roles.value(column))});
-    return workbook.replaceSheetText(sheetName(), rows, error);
+    QVector<ImportLayout> layouts{*this};
+    for (const ImportLayout &other : loadAll(workbook)) {
+        // Листы, которых в файле больше нет, забываем.
+        if (other.sheet != sheet && workbook.sheetNames().contains(other.sheet))
+            layouts.push_back(other);
+    }
+    return saveAll(workbook, layouts, sheet, error);
 }
 
 QString normalizeMark(const QString &text)

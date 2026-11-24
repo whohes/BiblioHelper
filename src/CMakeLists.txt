@@ -2,6 +2,8 @@
 add_library(bh_core STATIC
     core/action_log.h
     core/action_log.cpp
+    core/app_settings.h
+    core/app_settings.cpp
     core/book_groups.h
     core/book_groups.cpp
     core/copy_ids.h
@@ -14,6 +16,8 @@ add_library(bh_core STATIC
     core/fund_sheet.cpp
     core/import_layout.h
     core/import_layout.cpp
+    core/problem_report.h
+    core/problem_report.cpp
     core/withdrawal_archive.h
     core/withdrawal_archive.cpp
     core/withdrawal_report.h
@@ -54,6 +58,10 @@ add_executable(BiblioHelper WIN32
     ui/fund_table_page.h
     ui/icons.h
     ui/icons.cpp
+    ui/settings_dialog.h
+    ui/settings_dialog.cpp
+    ui/problem_report_dialog.h
+    ui/problem_report_dialog.cpp
     ui/book_groups_dialog.h
     ui/book_groups_dialog.cpp
     ui/export_dialog.h

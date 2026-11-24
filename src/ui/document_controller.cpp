@@ -14,6 +14,9 @@
 #include "withdraw_dialog.h"
 #include "export_dialog.h"
 #include "book_groups_dialog.h"
+#include "problem_report_dialog.h"
+#include "settings_dialog.h"
+#include "core/app_settings.h"
 #include "core/book_groups.h"
 #include "core/fund_export.h"
 #include "io/xlsx_font_colors.h"
@@ -22,6 +25,7 @@
 
 #include <QCheckBox>
 #include <QCursor>
+#include <QSysInfo>
 #include <QDesktopServices>
 #include <QDir>
 #include <QUrl>
@@ -44,7 +48,6 @@ namespace {
 const QString kLastDirKey = QStringLiteral("files/lastDirectory");
 const QString kExportDirKey = QStringLiteral("files/exportDirectory");
 // Сколько автоматических копий «перед сохранением» хранить.
-constexpr int kKeepSaveBackups = 20;
 
 bool samePath(const QString &a, const QString &b)
 {
@@ -67,6 +70,8 @@ DocumentController::DocumentController(MainWindow *window)
     m_proxy->setSourceModel(m_model);
     m_proxy->setStatusFilter(models::FundFilterProxy::StatusFilter::Active);
     m_proxy->setGroupBooks(true);
+    window->booksTable()->setIconSize(
+        QSize(models::FundFilterProxy::kArrowIconSize, models::FundFilterProxy::kArrowIconSize));
     m_withdrawnProxy->setSourceModel(m_model);
     m_withdrawnProxy->setStatusFilter(models::FundFilterProxy::StatusFilter::Withdrawn);
 
@@ -128,18 +133,21 @@ DocumentController::DocumentController(MainWindow *window)
         refreshLog();
     });
     connect(window, &MainWindow::openLogFolderRequested, this, &DocumentController::openLogFolder);
+    connect(window, &MainWindow::settingsRequested, this, &DocumentController::showSettings);
+    connect(window, &MainWindow::sheetRequested, this, &DocumentController::switchSheet);
+    connect(window, &MainWindow::reportProblemRequested, this, &DocumentController::reportProblem);
     connect(window, &MainWindow::findBooksRequested, this, [this] { findBooks(); });
     connect(window, &MainWindow::mergeBooksRequested, this, &DocumentController::mergeSelectedBooks);
     connect(window, &MainWindow::splitBooksRequested, this, &DocumentController::splitSelectedBooks);
     connect(window, &MainWindow::expandAllBooksToggled, m_proxy, &models::FundFilterProxy::setExpandAll);
-    // Стрелка ▸ слева в названии книги раскрывает и сворачивает её экземпляры.
+    // Синяя стрелка слева в названии книги раскрывает и сворачивает её экземпляры.
     connect(window->booksTable(), &QAbstractItemView::clicked, this, [this](const QModelIndex &index) {
         const int author = m_model->sheet().columnIndex(core::ColumnRole::AuthorTitle);
         if (index.column() != author || !m_proxy->isBookRow(index))
             return;
         QTableView *table = m_window->booksTable();
         const QPoint pos = table->viewport()->mapFromGlobal(QCursor::pos());
-        if (pos.x() - table->visualRect(index).left() <= table->fontMetrics().horizontalAdvance(QStringLiteral("▸  ")) + 8)
+        if (pos.x() - table->visualRect(index).left() <= models::FundFilterProxy::kArrowIconSize + 12)
             m_proxy->toggleBook(index);
     });
     // Ширину столбцов «Выбывших» подбираем, когда вкладка видна: до этого у таблицы нет размера.
@@ -299,6 +307,32 @@ void DocumentController::undo()
     m_window->statusBar()->showMessage(QStringLiteral("Последнее изменение отменено"), 5000);
 }
 
+void DocumentController::showSettings()
+{
+    SettingsDialog dialog(m_window);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const bool restart = dialog.apply();
+    m_log = core::ActionLog();  // папка программы могла смениться
+    m_workCopies = core::WorkCopies();
+    if (restart) {
+        QMessageBox::information(m_window, QStringLiteral("Настройки"),
+                                 QStringLiteral("Новый размер интерфейса появится после перезапуска программы."));
+    }
+    m_window->statusBar()->showMessage(QStringLiteral("Настройки сохранены"), 5000);
+}
+
+void DocumentController::reportProblem()
+{
+    core::ProblemReport report;
+    report.appVersion = QApplication::applicationVersion();
+    report.system = QStringLiteral("%1 (%2)").arg(QSysInfo::prettyProductName(), QSysInfo::currentCpuArchitecture());
+    report.fund = m_originalPath.isEmpty() ? QString() : QFileInfo(m_originalPath).fileName();
+    report.log = m_log.read(20);
+    ProblemReportDialog dialog(report, m_window);
+    dialog.exec();
+}
+
 void DocumentController::findBooks(bool afterImport)
 {
     if (!m_workbook.isOpen() || m_model->columnCount() == 0)
@@ -326,7 +360,7 @@ void DocumentController::findBooks(bool afterImport)
         copies);
     updateCounts();
     m_window->statusBar()->showMessage(
-        QStringLiteral("Объединено %1 книг из %2 экз. Экземпляры раскрываются стрелкой ▸ в названии. "
+        QStringLiteral("Объединено %1 книг из %2 экз. Экземпляры раскрываются синей кнопкой-стрелкой слева от названия. "
                        "Нажмите «Сохранить», чтобы запомнить это в рабочей копии.")
             .arg(books)
             .arg(copies),
@@ -371,7 +405,7 @@ void DocumentController::splitSelectedBooks()
     const int split = m_model->splitBooks(rows);
     if (split == 0) {
         QMessageBox::information(m_window, QStringLiteral("Разделить"),
-                                 QStringLiteral("Выделите книгу из нескольких экземпляров (строку со стрелкой ▸) "
+                                 QStringLiteral("Выделите книгу из нескольких экземпляров (строку с синей кнопкой-стрелкой) "
                                                 "или отдельные её экземпляры и нажмите «Разделить»: они станут "
                                                 "отдельными книгами."));
         return;
@@ -834,7 +868,8 @@ bool DocumentController::openFile(const QString &path)
     }
     if (imported && m_model->rowCount() > 0) {
         finishImport(withdrawnMarks);
-        findBooks(true);
+        if (core::AppSettings::offerBookGroupsAfterImport())
+            findBooks(true);
     }
     return true;
 }
@@ -885,6 +920,72 @@ void DocumentController::showWorkbook(const core::ImportLayout &layout, const QS
     }
     rememberDiskCounts();
     refreshVersions();
+    refreshSheetTabs();
+}
+
+void DocumentController::refreshSheetTabs()
+{
+    m_fundSheets.clear();
+    if (!m_workbook.isOpen()) {
+        m_window->setSheetTabs({}, {});
+        return;
+    }
+    // Листы-фонды: уже настроенные в мастере и те, где программа сама нашла книги.
+    QSet<QString> configured;
+    for (const core::ImportLayout &layout : core::ImportLayout::loadAll(m_workbook))
+        configured.insert(layout.sheet);
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    for (const QString &name : m_workbook.sheetNames()) {
+        if (m_workbook.isVeryHidden(name) || name.startsWith(QLatin1Char('_')) || name == core::archiveSheetName())
+            continue;
+        bool fund = configured.contains(name) || name == m_model->sheet().sheetName;
+        if (!fund) {
+            core::FundSheet detected;
+            fund = core::FundSheetReader::read(m_workbook, name, &detected) && !detected.records.isEmpty();
+        }
+        if (fund)
+            m_fundSheets << name;
+    }
+    QApplication::restoreOverrideCursor();
+    m_window->setSheetTabs(m_fundSheets, m_model->sheet().sheetName);
+}
+
+void DocumentController::switchSheet(const QString &sheet)
+{
+    if (!m_workbook.isOpen() || sheet == m_model->sheet().sheetName)
+        return;
+    if (!confirmDiscardChanges()) {
+        m_window->setSheetTabs(m_fundSheets, m_model->sheet().sheetName);  // ярлык обратно
+        return;
+    }
+    const QString fileName = QFileInfo(m_originalPath).fileName();
+    for (const core::ImportLayout &layout : core::ImportLayout::loadAll(m_workbook)) {
+        if (layout.sheet == sheet) {
+            showWorkbook(layout, fileName);
+            m_window->setUnsavedChanges(false);
+            log(QStringLiteral("open"), QStringLiteral("Лист «%1»").arg(sheet), m_model->rowCount());
+            return;
+        }
+    }
+    // Лист открывается впервые — через мастер импорта, начиная с этого листа.
+    ImportWizard wizard(m_workbook, fileName, m_window, sheet);
+    if (wizard.exec() != QDialog::Accepted) {
+        m_window->setSheetTabs(m_fundSheets, m_model->sheet().sheetName);
+        return;
+    }
+    const core::ImportLayout layout = wizard.layout();
+    const QSet<QString> marks = wizard.withdrawnMarks();
+    showWorkbook(layout, fileName);
+    m_window->setUnsavedChanges(false);
+    log(QStringLiteral("import"),
+        QStringLiteral("Лист «%1», названия столбцов в строке %2").arg(layout.sheet).arg(layout.headerRow),
+        m_model->rowCount());
+    if (m_model->rowCount() > 0) {
+        finishImport(marks);
+        if (core::AppSettings::offerBookGroupsAfterImport())
+            findBooks(true);
+    }
+    refreshSheetTabs();
 }
 
 void DocumentController::finishImport(const QSet<QString> &withdrawnMarks)
@@ -963,7 +1064,7 @@ void DocumentController::save()
                 .isEmpty())
             backupWarning = QStringLiteral(" Резервная копия не сделана: %1").arg(backupError);
         else
-            core::WorkCopies::pruneBackups(m_workPath, kKeepSaveBackups);
+            core::WorkCopies::pruneBackups(m_workPath, core::AppSettings::keepSaveBackups());
     }
     if (!m_model->writeChanges(m_workbook, &error) || !m_workbook.saveAs(m_workPath, &error)) {
         showError(QStringLiteral("Не удалось сохранить"),

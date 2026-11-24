@@ -16,6 +16,8 @@ namespace bh::core {
 // Как читать фонд: лист, строка заголовков и назначение столбцов.
 // Задаётся в мастере импорта и хранится в рабочей копии на скрытом листе
 // «_BiblioHelperImport», чтобы при следующем открытии читать файл так же.
+// В одном файле может быть несколько листов-фондов: настройки хранятся для
+// каждого листа, плюс какой лист открыт последним.
 struct ImportLayout
 {
     QString sheet;
@@ -28,9 +30,15 @@ struct ImportLayout
     static ImportLayout fromSheet(const FundSheet &sheet);
 
     static QString sheetName();
-    // Пустые настройки, если в файле их нет.
+    // Настройки последнего открытого листа; пустые, если в файле их нет.
     static ImportLayout load(const io::XlsxWorkbook &workbook);
+    // Настройки всех листов-фондов файла (последний открытый — первым).
+    static QVector<ImportLayout> loadAll(const io::XlsxWorkbook &workbook);
+    // Записать настройки этого листа (остальные листы сохраняются),
+    // этот лист становится последним открытым.
     bool save(io::XlsxWorkbook &workbook, QString *error = nullptr) const;
+    static bool saveAll(io::XlsxWorkbook &workbook, const QVector<ImportLayout> &layouts, const QString &active,
+                        QString *error = nullptr);
 };
 
 // Назначения, которые можно выбрать для столбца в мастере, по порядку списка.

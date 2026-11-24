@@ -55,6 +55,10 @@ private slots:
     void showWorkbook(const core::ImportLayout &layout, const QString &displayName);
     void undo();
     void findBooks(bool afterImport = false);
+    void showSettings();
+    void switchSheet(const QString &sheet);
+    void refreshSheetTabs();
+    void reportProblem();
     void mergeSelectedBooks();
     void splitSelectedBooks();
     void withdrawSelected();
@@ -85,6 +89,7 @@ private:
     core::WorkCopies m_workCopies;
     core::ActionLog m_log;
     bool m_logCurrentOnly = true;
+    QStringList m_fundSheets;  // листы файла с книгами (ярлыки внизу окна)
     io::XlsxWorkbook m_workbook;
     QString m_originalPath;
     QString m_workPath;
