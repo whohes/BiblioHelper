@@ -56,6 +56,10 @@ jobs:
           cd openssl-1.1.1w
           export PATH="$(cygpath -u "$IQTA_TOOLS")/mingw810_32/bin:$PATH"
           gcc --version | head -1
+          # В perl из Git нет Pod::Usage, а Configure подключает его лишь для справки.
+          mkdir -p "$RUNNER_TEMP/perl5/Pod"
+          printf 'package Pod::Usage;\nuse Exporter "import";\nour @EXPORT = qw(pod2usage);\nsub pod2usage { exit 0 }\n1;\n' > "$RUNNER_TEMP/perl5/Pod/Usage.pm"
+          export PERL5LIB="$RUNNER_TEMP/perl5"
           perl Configure mingw shared no-asm no-tests -static-libgcc --prefix=C:/openssl-1.1.1w-x86
           mingw32-make -j4 build_libs
           mkdir -p /c/openssl-1.1.1w-x86/bin
